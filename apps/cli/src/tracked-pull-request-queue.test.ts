@@ -54,6 +54,15 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
       },
     ],
     number: 43,
+    reviews: [
+      {
+        authorLogin: "greptile-apps[bot]",
+        body: "Confidence: 4/5",
+        createdAtMs: 10,
+        id: "review-43",
+        isBot: true,
+      },
+    ],
     url: "https://github.com/peterje/orca/pull/43",
   }),
   "peterje/orca#44": pullRequestFeedback({ number: 44, url: "https://github.com/peterje/orca/pull/44" }),

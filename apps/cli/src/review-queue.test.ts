@@ -3,170 +3,96 @@ import type { PullRequestFeedback } from "./github.ts"
 import { findPendingPullRequestReview } from "./review-queue.ts"
 
 describe("review queue", () => {
-  it("selects label-triggered unresolved review threads", () => {
+  it("selects failing Greptile feedback after the latest review request", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
-        labels: ["orca-review"],
+        comments: [comment({ authorLogin: "greptile-apps[bot]", body: "Please keep this branch scoped.", createdAtMs: 60, isBot: true })],
         reviewThreads: [
           {
-            comments: [reviewComment({ body: "Please rename this helper.", createdAtMs: 10 })],
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 55, isBot: true })],
             isCollapsed: false,
             isResolved: false,
           },
         ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 50, isBot: true })],
       }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
 
     expect(pending).not.toBeNull()
-    expect(pending?.trigger).toBe("label")
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
     expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.feedbackMarkdown).toContain("Please keep this branch scoped.")
   })
 
-  it("requires an explicit trigger before queueing review work", () => {
+  it("ignores human review feedback in the Greptile loop", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 60 })],
         reviewThreads: [
           {
-            comments: [reviewComment({ authorLogin: "author", body: "Please rename this helper.", createdAtMs: 10 })],
+            comments: [reviewComment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 55 })],
             isCollapsed: false,
             isResolved: false,
           },
         ],
-        authorLogin: "author",
+        reviews: [review({ authorLogin: "reviewer", body: "Confidence: 4/5", createdAtMs: 50 })],
       }),
-      pullRequest: pullRequest({ lastReviewedAtMs: null }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
 
     expect(pending).toBeNull()
   })
 
-  it("selects recent reviewer feedback without a manual trigger", () => {
+  it("suppresses duplicate review requests while Greptile has not responded yet", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
-        authorLogin: "author",
-        comments: [
-          comment({ authorLogin: "author", body: "@greptileai", createdAtMs: 20 }),
-          comment({ authorLogin: "greptile-apps", body: "Please avoid failing the run for a missing issue URL.", createdAtMs: 50 }),
-        ],
+        comments: [comment({ authorLogin: "greptile-apps[bot]", body: "Please avoid failing the run for a missing issue URL.", createdAtMs: 50, isBot: true })],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 40, isBot: true })],
       }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
-    })
-
-    expect(pending).not.toBeNull()
-    expect(pending?.trigger).toBe("feedback")
-    expect(pending?.feedbackMarkdown).toContain("Please avoid failing the run for a missing issue URL.")
-    expect(pending?.feedbackMarkdown).not.toContain("@greptileai")
-  })
-
-  it("ignores bot activity when detecting automatic feedback", () => {
-    const pending = findPendingPullRequestReview({
-      feedback: feedback({
-        authorLogin: "author",
-        comments: [comment({ authorLogin: "github-actions[bot]", body: "All checks passed.", createdAtMs: 50, isBot: true })],
-        reviewThreads: [
-          {
-            comments: [reviewComment({ authorLogin: "renovate[bot]", body: "@orca please update this snapshot.", createdAtMs: 60, isBot: true })],
-            isCollapsed: false,
-            isResolved: false,
-          },
-        ],
-        reviews: [review({ authorLogin: "coderabbit[bot]", body: "Looks good to me.", createdAtMs: 70, isBot: true })],
-      }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 100 }),
     })
 
     expect(pending).toBeNull()
   })
 
-  it("does not let bot mentions outrank human feedback", () => {
+  it("uses the latest Greptile review score when deciding whether follow-up work is needed", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
-        authorLogin: "author",
-        comments: [
-          comment({ authorLogin: "github-actions[bot]", body: "@orca all checks passed.", createdAtMs: 40, isBot: true }),
-          comment({ authorLogin: "reviewer", body: "Please rerun this after the rename.", createdAtMs: 50 }),
+        reviews: [
+          review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 50, isBot: true, id: "review-1" }),
+          review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 70, isBot: true, id: "review-2" }),
         ],
       }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
-    })
-
-    expect(pending).not.toBeNull()
-    expect(pending?.trigger).toBe("feedback")
-    expect(pending?.feedbackMarkdown).toContain("Please rerun this after the rename.")
-    expect(pending?.feedbackMarkdown).not.toContain("@orca all checks passed.")
-  })
-
-  it("keeps author @orca mentions as explicit review requests", () => {
-    const pending = findPendingPullRequestReview({
-      feedback: feedback({
-        authorLogin: "author",
-        comments: [comment({ authorLogin: "author", body: "@orca can you take another look?", createdAtMs: 50 })],
-      }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
-    })
-
-    expect(pending).not.toBeNull()
-    expect(pending?.trigger).toBe("mention")
-    expect(pending?.feedbackMarkdown).toContain("@orca can you take another look?")
-  })
-
-  it("ignores unresolved reviewer threads that predate the last review", () => {
-    const pending = findPendingPullRequestReview({
-      feedback: feedback({
-        authorLogin: "author",
-        reviewThreads: [
-          {
-            comments: [reviewComment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 10 })],
-            isCollapsed: false,
-            isResolved: false,
-          },
-        ],
-      }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 50 }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
 
     expect(pending).toBeNull()
   })
 
-  it("omits old unresolved threads from feedback-triggered markdown", () => {
+  it("requires an explicit confidence or score label when parsing Greptile review scores", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
-        authorLogin: "author",
-        comments: [comment({ authorLogin: "reviewer", body: "Please rerun this after the rename.", createdAtMs: 60 })],
-        reviewThreads: [
-          {
-            comments: [reviewComment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 10 })],
-            isCollapsed: false,
-            isResolved: false,
-          },
+        reviews: [
+          review({
+            authorLogin: "greptile-apps[bot]",
+            body: "Updated 3/5 files while reviewing this pull request.",
+            createdAtMs: 50,
+            isBot: true,
+          }),
         ],
       }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 50 }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
 
-    expect(pending).not.toBeNull()
-    expect(pending?.trigger).toBe("feedback")
-    expect(pending?.feedbackMarkdown).toContain("Please rerun this after the rename.")
-    expect(pending?.feedbackMarkdown).not.toContain("Please rename this helper.")
-  })
-
-  it("selects recent @orca mentions from general comments", () => {
-    const pending = findPendingPullRequestReview({
-      feedback: feedback({
-        comments: [comment({ body: "@orca can you address this?", createdAtMs: 50 })],
-      }),
-      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
-    })
-
-    expect(pending).not.toBeNull()
-    expect(pending?.trigger).toBe("mention")
-    expect(pending?.feedbackMarkdown).toContain("@orca can you address this?")
+    expect(pending).toBeNull()
   })
 })
 
 const pullRequest = (overrides?: Partial<{
   readonly lastReviewedAtMs: number | null
+  readonly waitingForGreptileReviewSinceMs: number | null
 }>) => ({
   branch: "orca/eng-1",
   createdAtMs: 1,
@@ -179,7 +105,7 @@ const pullRequest = (overrides?: Partial<{
   prUrl: "https://github.com/peterje/orca/pull/1",
   repo: "peterje/orca",
   updatedAtMs: 1,
-  waitingForGreptileReviewSinceMs: null,
+  waitingForGreptileReviewSinceMs: overrides?.waitingForGreptileReviewSinceMs ?? null,
 })
 
 const feedback = (overrides?: Partial<PullRequestFeedback>): PullRequestFeedback => ({
