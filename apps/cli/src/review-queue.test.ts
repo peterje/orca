@@ -97,6 +97,20 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).not.toContain("@orca all checks passed.")
   })
 
+  it("keeps author @orca mentions as explicit review requests", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [comment({ authorLogin: "author", body: "@orca can you take another look?", createdAtMs: 50 })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("mention")
+    expect(pending?.feedbackMarkdown).toContain("@orca can you take another look?")
+  })
+
   it("selects recent @orca mentions from general comments", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({

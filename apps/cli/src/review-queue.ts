@@ -28,29 +28,31 @@ export const findPendingPullRequestReview = (options: {
 
   const since = options.pullRequest.lastReviewedAtMs ?? 0
   const triggerLabelPresent = options.feedback.labels.some((label) => label.toLowerCase() === reviewTriggerLabel)
-  const isExternalReviewer = (entry: { readonly authorLogin: string; readonly isBot: boolean }) =>
-    entry.authorLogin !== options.feedback.authorLogin && !entry.isBot
+  const isRelevantFeedback = (entry: { readonly authorLogin: string; readonly body: string; readonly isBot: boolean }) =>
+    !entry.isBot && (entry.authorLogin !== options.feedback.authorLogin || containsOrcaMention(entry.body))
   const unresolvedThreads = options.feedback.reviewThreads
-    .map((thread) => stripAuthorOnlyThread(thread, options.feedback.authorLogin))
+    .map((thread) => stripRelevantThreadComments(thread, options.feedback.authorLogin))
     .filter((thread): thread is PullRequestReviewThread => thread !== null)
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
   const recentComments = options.feedback.comments.filter(
-    (comment) => comment.createdAtMs > since && isExternalReviewer(comment),
+    (comment) => comment.createdAtMs > since && isRelevantFeedback(comment),
   )
   const recentReviews = options.feedback.reviews.filter(
-    (review) => review.body.trim().length > 0 && review.createdAtMs > since && isExternalReviewer(review),
+    (review) => review.body.trim().length > 0 && review.createdAtMs > since && isRelevantFeedback(review),
   )
   const mentionTriggered = hasMentionTrigger({
-    comments: options.feedback.comments,
-    reviews: options.feedback.reviews,
-    threads: options.feedback.reviewThreads,
+    comments: recentComments,
+    reviews: recentReviews,
+    threads: unresolvedThreads,
     since,
   })
-  const automaticFeedbackPresent = unresolvedThreads.length > 0 || recentComments.length > 0 || recentReviews.length > 0
+  const feedbackPresent = unresolvedThreads.length > 0 || recentComments.length > 0 || recentReviews.length > 0
 
-  if (!automaticFeedbackPresent) {
+  if (!feedbackPresent) {
     return null
   }
+
+  const trigger = triggerLabelPresent ? "label" : mentionTriggered ? "mention" : "feedback"
 
   const latestFeedbackAtMs = Math.max(
     0,
@@ -64,13 +66,13 @@ export const findPendingPullRequestReview = (options: {
     feedbackMarkdown: renderReviewFeedbackMarkdown({
       comments: recentComments,
       reviews: recentReviews,
-      trigger: triggerLabelPresent ? "label" : mentionTriggered ? "mention" : "feedback",
+      trigger,
       triggerLabelPresent,
       unresolvedThreads,
     }),
     latestFeedbackAtMs,
     pullRequest: options.pullRequest,
-    trigger: triggerLabelPresent ? "label" : mentionTriggered ? "mention" : "feedback",
+    trigger,
     triggerLabelPresent,
   }
 }
@@ -88,8 +90,10 @@ const hasMentionTrigger = (options: {
 
 const containsOrcaMention = (body: string) => /(^|\W)@orca\b/i.test(body)
 
-const stripAuthorOnlyThread = (thread: PullRequestReviewThread, authorLogin: string): PullRequestReviewThread | null => {
-  const comments = thread.comments.filter((comment) => comment.authorLogin !== authorLogin && !comment.isBot)
+const stripRelevantThreadComments = (thread: PullRequestReviewThread, authorLogin: string): PullRequestReviewThread | null => {
+  const comments = thread.comments.filter(
+    (comment) => !comment.isBot && (comment.authorLogin !== authorLogin || containsOrcaMention(comment.body)),
+  )
   if (comments.length === 0) {
     return null
   }
