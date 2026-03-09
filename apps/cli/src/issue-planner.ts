@@ -27,12 +27,25 @@ export const planIssues = (
   const directIssues = issues.filter((issue) => isTaggedIssue(issue, options?.linearLabel))
   const workIds = new Set<string>()
   const inheritedFrom = new Map<string, Set<string>>()
+  const visitedByRoot = new Map<string, Set<string>>()
 
   const visit = (issueId: string, rootId: string) => {
     const issue = issuesById.get(issueId)
     if (!issue) {
       return
     }
+
+    let visited = visitedByRoot.get(rootId)
+    if (!visited) {
+      visited = new Set<string>()
+      visitedByRoot.set(rootId, visited)
+    }
+
+    if (visited.has(issueId)) {
+      return
+    }
+
+    visited.add(issueId)
 
     workIds.add(issueId)
     if (issueId !== rootId) {
