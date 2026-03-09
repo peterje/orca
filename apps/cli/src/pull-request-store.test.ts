@@ -81,6 +81,26 @@ describe("PullRequestStore", () => {
         expect(records[0]?.waitingForGreptileReviewSinceMs).toBeNull()
       }),
     ))
+
+  it.effect("removes tracked pull requests from storage", () =>
+    withTempCwd(() =>
+      Effect.gen(function* () {
+        yield* withStore((store) => store.upsert({
+          branch: "orca/eng-1-example-issue",
+          issueDescription: "Example issue description",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-1",
+          issueTitle: "Example issue",
+          prNumber: 42,
+          prUrl: "https://github.com/peterje/orca/pull/42",
+          repo: "peterje/orca",
+          waitingForGreptileReviewSinceMs: 1_700_000_000_000,
+        }))
+
+        expect(yield* withStore((store) => store.remove({ prNumber: 42, repo: "peterje/orca" }))).toBe(true)
+        expect(yield* withStore((store) => store.list)).toEqual([])
+      }),
+    ))
 })
 
 const withStore = <A, E>(use: (store: typeof PullRequestStore.Service) => Effect.Effect<A, E>) =>

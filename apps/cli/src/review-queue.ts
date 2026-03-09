@@ -18,6 +18,10 @@ export type PendingPullRequestReview = {
   readonly triggerLabelPresent: boolean
 }
 
+export const comparePendingPullRequestReviews = (left: PendingPullRequestReview, right: PendingPullRequestReview) =>
+  right.latestFeedbackAtMs - left.latestFeedbackAtMs
+  || left.pullRequest.issueIdentifier.localeCompare(right.pullRequest.issueIdentifier)
+
 export const findPendingPullRequestReview = (options: {
   readonly feedback: PullRequestFeedback
   readonly pullRequest: OrcaManagedPullRequest
