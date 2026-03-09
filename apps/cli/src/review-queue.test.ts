@@ -59,6 +59,44 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).not.toContain("@greptileai")
   })
 
+  it("ignores bot activity when detecting automatic feedback", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [comment({ authorLogin: "github-actions[bot]", body: "All checks passed.", createdAtMs: 50, isBot: true })],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "renovate[bot]", body: "@orca please update this snapshot.", createdAtMs: 60, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "coderabbit[bot]", body: "Looks good to me.", createdAtMs: 70, isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).toBeNull()
+  })
+
+  it("does not let bot mentions outrank human feedback", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [
+          comment({ authorLogin: "github-actions[bot]", body: "@orca all checks passed.", createdAtMs: 40, isBot: true }),
+          comment({ authorLogin: "reviewer", body: "Please rerun this after the rename.", createdAtMs: 50 }),
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rerun this after the rename.")
+    expect(pending?.feedbackMarkdown).not.toContain("@orca all checks passed.")
+  })
+
   it("selects recent @orca mentions from general comments", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
@@ -106,6 +144,14 @@ const comment = (overrides?: Partial<PullRequestFeedback["comments"][number]>) =
   body: overrides?.body ?? "Comment",
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "comment-1",
+  isBot: overrides?.isBot ?? false,
+})
+
+const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => ({
+  authorLogin: overrides?.authorLogin ?? "reviewer",
+  body: overrides?.body ?? "Review",
+  createdAtMs: overrides?.createdAtMs ?? 1,
+  id: overrides?.id ?? "review-1",
   isBot: overrides?.isBot ?? false,
 })
 

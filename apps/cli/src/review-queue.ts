@@ -28,16 +28,17 @@ export const findPendingPullRequestReview = (options: {
 
   const since = options.pullRequest.lastReviewedAtMs ?? 0
   const triggerLabelPresent = options.feedback.labels.some((label) => label.toLowerCase() === reviewTriggerLabel)
-  const isExternalReviewer = (authorLogin: string) => authorLogin !== options.feedback.authorLogin
+  const isExternalReviewer = (entry: { readonly authorLogin: string; readonly isBot: boolean }) =>
+    entry.authorLogin !== options.feedback.authorLogin && !entry.isBot
   const unresolvedThreads = options.feedback.reviewThreads
     .map((thread) => stripAuthorOnlyThread(thread, options.feedback.authorLogin))
     .filter((thread): thread is PullRequestReviewThread => thread !== null)
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
   const recentComments = options.feedback.comments.filter(
-    (comment) => comment.createdAtMs > since && isExternalReviewer(comment.authorLogin),
+    (comment) => comment.createdAtMs > since && isExternalReviewer(comment),
   )
   const recentReviews = options.feedback.reviews.filter(
-    (review) => review.body.trim().length > 0 && review.createdAtMs > since && isExternalReviewer(review.authorLogin),
+    (review) => review.body.trim().length > 0 && review.createdAtMs > since && isExternalReviewer(review),
   )
   const mentionTriggered = hasMentionTrigger({
     comments: options.feedback.comments,
@@ -46,10 +47,6 @@ export const findPendingPullRequestReview = (options: {
     since,
   })
   const automaticFeedbackPresent = unresolvedThreads.length > 0 || recentComments.length > 0 || recentReviews.length > 0
-
-  if (!triggerLabelPresent && !mentionTriggered && !automaticFeedbackPresent) {
-    return null
-  }
 
   if (!automaticFeedbackPresent) {
     return null
@@ -84,15 +81,15 @@ const hasMentionTrigger = (options: {
   readonly since: number
   readonly threads: ReadonlyArray<PullRequestReviewThread>
 }) =>
-  options.comments.some((comment) => comment.createdAtMs > options.since && containsOrcaMention(comment.body))
-  || options.reviews.some((review) => review.createdAtMs > options.since && containsOrcaMention(review.body))
+  options.comments.some((comment) => !comment.isBot && comment.createdAtMs > options.since && containsOrcaMention(comment.body))
+  || options.reviews.some((review) => !review.isBot && review.createdAtMs > options.since && containsOrcaMention(review.body))
   || options.threads.some((thread) =>
-    thread.comments.some((comment) => comment.createdAtMs > options.since && containsOrcaMention(comment.body)))
+    thread.comments.some((comment) => !comment.isBot && comment.createdAtMs > options.since && containsOrcaMention(comment.body)))
 
 const containsOrcaMention = (body: string) => /(^|\W)@orca\b/i.test(body)
 
 const stripAuthorOnlyThread = (thread: PullRequestReviewThread, authorLogin: string): PullRequestReviewThread | null => {
-  const comments = thread.comments.filter((comment) => comment.authorLogin !== authorLogin)
+  const comments = thread.comments.filter((comment) => comment.authorLogin !== authorLogin && !comment.isBot)
   if (comments.length === 0) {
     return null
   }
