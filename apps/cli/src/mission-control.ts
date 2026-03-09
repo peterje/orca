@@ -5,8 +5,8 @@ import { Linear, LinearApiError } from "./linear.ts"
 import { LinearAuthRequiredError } from "./linear/token-manager.ts"
 import { PullRequestStore, PullRequestStoreError } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigError } from "./repo-config.ts"
-import { findPendingPullRequestReview, type PendingPullRequestReview } from "./review-queue.ts"
 import { RunState, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
+import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 
 export type MissionControlSnapshot = {
   readonly current:
@@ -49,33 +49,19 @@ export const MissionControlLive = Effect.gen(function* () {
   const snapshot = Effect.gen(function* () {
     const config = yield* repoConfig.read
     const activeRun = yield* runState.current.pipe(Effect.mapError(toMissionControlError))
-    const trackedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toMissionControlError))
-    const currentIssueId = activeRun?.issueId ?? null
-    const visiblePullRequests = trackedPullRequests.filter((pullRequest) => pullRequest.issueId !== currentIssueId)
-    const activeGreptilePullRequests = visiblePullRequests.filter((pullRequest) => pullRequest.greptileCompletedAtMs === null)
-    const pendingReviews = yield* Effect.forEach(
-      activeGreptilePullRequests,
-      (pullRequest) =>
-        github.readPullRequestFeedback({
-          pullRequestNumber: pullRequest.prNumber,
-          repo: pullRequest.repo,
-        }).pipe(
-          Effect.map((feedback) => findPendingPullRequestReview({ feedback, pullRequest })),
-          Effect.mapError(toMissionControlError),
-        ),
-      { concurrency: 1 },
-    ).pipe(
-      Effect.map((reviews) =>
-        reviews
-          .filter((review): review is PendingPullRequestReview => review !== null)
-          .sort(comparePendingReviews)),
+    const trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({ github, pullRequestStore }).pipe(
+      Effect.mapError(toMissionControlError),
     )
-    const trackedIssueIds = new Set(trackedPullRequests.map((pullRequest) => pullRequest.issueId))
+    const currentIssueId = activeRun?.issueId ?? null
+    const pendingReviews = trackedPullRequestQueue.pendingReviews.filter((review) => review.pullRequest.issueId !== currentIssueId)
+    const trackedIssueIds = new Set(trackedPullRequestQueue.openPullRequests.map((pullRequest) => pullRequest.issueId))
     const issues = yield* linear.issues
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
     const actionableIssues = plan.actionable.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))
     const blockedIssues = plan.blocked.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))
-    const waitingForReviewCount = activeGreptilePullRequests.filter((pullRequest) => pullRequest.waitingForGreptileReviewSinceMs !== null).length
+    const waitingForReviewCount = trackedPullRequestQueue.waitingForReviewPullRequests.filter(
+      (pullRequest) => pullRequest.issueId !== currentIssueId,
+    ).length
 
     const next = pendingReviews[0]
       ? {
@@ -140,10 +126,6 @@ const formatQueuedStage = (stage: "ready-to-pick-up" | "review-feedback-ready") 
       return "review feedback ready"
   }
 }
-
-const comparePendingReviews = (left: PendingPullRequestReview, right: PendingPullRequestReview) =>
-  right.latestFeedbackAtMs - left.latestFeedbackAtMs
-  || left.pullRequest.issueIdentifier.localeCompare(right.pullRequest.issueIdentifier)
 
 const toMissionControlError = (cause: unknown) =>
   cause instanceof MissionControlError

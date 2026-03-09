@@ -6,8 +6,9 @@ import { Linear, type LinearService } from "./linear.ts"
 import { PromptGen, PromptGenError } from "./prompt-gen.ts"
 import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
-import { findLatestGreptileReviewScore, findPendingPullRequestReview, type PendingPullRequestReview } from "./review-queue.ts"
+import { findLatestGreptileReviewScore, type PendingPullRequestReview } from "./review-queue.ts"
 import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
+import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
 import { Worktree, WorktreeError, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
 
@@ -81,25 +82,11 @@ export const RunnerLive = Effect.gen(function* () {
 
   const selectNextWork = Effect.gen(function* () {
     const config = yield* repoConfig.read
-    const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
-    const trackedIssueIds = new Set(storedPullRequests.map((pullRequest) => pullRequest.issueId))
-    const activeGreptilePullRequests = storedPullRequests.filter(isTrackedForGreptileLoop)
-    const reviewCandidates = yield* Effect.forEach(
-      activeGreptilePullRequests,
-      (pullRequest) =>
-        github.readPullRequestFeedback({
-          pullRequestNumber: pullRequest.prNumber,
-          repo: pullRequest.repo,
-        }).pipe(
-          Effect.map((feedback) => findPendingPullRequestReview({ feedback, pullRequest })),
-          Effect.mapError(toRunnerFailure),
-        ),
-      { concurrency: 1 },
+    const trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({ github, pullRequestStore }).pipe(
+      Effect.mapError(toRunnerFailure),
     )
-
-    const review = reviewCandidates
-      .filter((candidate): candidate is PendingPullRequestReview => candidate !== null)
-      .sort(comparePendingReviews)[0]
+    const trackedIssueIds = new Set(trackedPullRequestQueue.openPullRequests.map((pullRequest) => pullRequest.issueId))
+    const review = trackedPullRequestQueue.pendingReviews[0]
 
     if (review) {
       return Option.some({ config, kind: "review", review } satisfies SelectedWork)
@@ -112,7 +99,7 @@ export const RunnerLive = Effect.gen(function* () {
       return Option.none<SelectedWork>()
     }
 
-    if (countWaitingPullRequests(activeGreptilePullRequests) >= config.maxWaitingPullRequests) {
+    if (trackedPullRequestQueue.waitingForReviewPullRequests.length >= config.maxWaitingPullRequests) {
       return Option.none<SelectedWork>()
     }
 
@@ -704,21 +691,10 @@ const makePullRequestBody = (issueIdentifier: string, issueTitle: string, verify
     `closes ${issueIdentifier}`,
   ].join("\n")
 
-const comparePendingReviews = (left: PendingPullRequestReview, right: PendingPullRequestReview) =>
-  right.latestFeedbackAtMs - left.latestFeedbackAtMs
-  || left.pullRequest.issueIdentifier.localeCompare(right.pullRequest.issueIdentifier)
-
-const countWaitingPullRequests = (pullRequests: ReadonlyArray<OrcaManagedPullRequest>) =>
-  pullRequests.filter(isWaitingForGreptileReview).length
-
-const isTrackedForGreptileLoop = (pullRequest: OrcaManagedPullRequest) =>
-  pullRequest.greptileCompletedAtMs === null
-
 const isWaitingForGreptileReview = (
   pullRequest: OrcaManagedPullRequest,
 ): pullRequest is WaitingForGreptileReviewPullRequest =>
   pullRequest.greptileCompletedAtMs === null && pullRequest.waitingForGreptileReviewSinceMs !== null
-
 const formatIssueLabel = (issueIdentifier: string, issueTitle: string) =>
   issueTitle.trim().length > 0 ? `${issueIdentifier} ${issueTitle}` : issueIdentifier
 

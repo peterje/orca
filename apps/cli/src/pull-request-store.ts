@@ -33,6 +33,10 @@ export type PullRequestStoreService = {
     readonly repo: string
     readonly waitingForGreptileReviewSinceMs: number
   }) => Effect.Effect<OrcaManagedPullRequest | null, PullRequestStoreError>
+  readonly remove: (options: {
+    readonly prNumber: number
+    readonly repo: string
+  }) => Effect.Effect<boolean, PullRequestStoreError>
   readonly upsert: (record: {
     readonly branch: string
     readonly issueDescription: string
@@ -195,7 +199,21 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return updated
     })
 
-  return PullRequestStore.of({ list, markGreptileCompleted, markGreptileReviewRequested, upsert })
+  const remove = (options: {
+    readonly prNumber: number
+    readonly repo: string
+  }) =>
+    Effect.gen(function* () {
+      const records = yield* list
+      const nextRecords = records.filter((record) => !(record.repo === options.repo && record.prNumber === options.prNumber))
+      if (nextRecords.length === records.length) {
+        return false
+      }
+      yield* write(nextRecords)
+      return true
+    })
+
+  return PullRequestStore.of({ list, markGreptileCompleted, markGreptileReviewRequested, remove, upsert })
 })
 
 export const PullRequestStoreLayer = Layer.effect(PullRequestStore, PullRequestStoreLive)
