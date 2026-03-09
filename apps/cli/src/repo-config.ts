@@ -14,6 +14,7 @@ export class RepoConfigData extends Schema.Class<RepoConfigData>("orca/RepoConfi
   draftPr: Schema.Boolean,
   greptilePollIntervalSeconds: Schema.Number,
   linearLabel: Schema.String,
+  linearWorkspace: Schema.optional(Schema.String),
   maxWaitingPullRequests: Schema.Number,
   repo: Schema.String,
   setup: Schema.Array(Schema.String),
@@ -37,6 +38,7 @@ export type RepoConfigService = {
     readonly draftPr?: boolean | undefined
     readonly force?: boolean | undefined
     readonly linearLabel?: string | undefined
+    readonly linearWorkspace?: string | undefined
     readonly repo?: string | undefined
   }) => Effect.Effect<RepoConfigData, RepoConfigError>
 }
@@ -91,6 +93,7 @@ export const RepoConfigLive = Effect.gen(function* () {
     readonly draftPr?: boolean | undefined
     readonly force?: boolean | undefined
     readonly linearLabel?: string | undefined
+    readonly linearWorkspace?: string | undefined
     readonly repo?: string | undefined
   }) =>
     Effect.gen(function* () {
@@ -106,6 +109,7 @@ export const RepoConfigLive = Effect.gen(function* () {
       const repo = options?.repo ?? (yield* detectRepo(spawner))
       const baseBranch = options?.baseBranch ?? (yield* detectCurrentBranch(spawner)) ?? "main"
       const verify = yield* inferVerifyCommands(fs)
+      const linearWorkspace = normalizeLinearWorkspace(options?.linearWorkspace)
       const config = new RepoConfigData({
         agent: options?.agent ?? "opencode",
         agentArgs: [],
@@ -116,6 +120,7 @@ export const RepoConfigLive = Effect.gen(function* () {
         draftPr: options?.draftPr ?? true,
         greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
         linearLabel: options?.linearLabel ?? "Orca",
+        ...(linearWorkspace === undefined ? {} : { linearWorkspace }),
         maxWaitingPullRequests: defaultMaxWaitingPullRequests,
         repo,
         setup: ["bun install"],
@@ -150,8 +155,22 @@ const normalizeRepoConfig = (json: unknown) =>
         greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
         maxWaitingPullRequests: defaultMaxWaitingPullRequests,
         ...json,
+        linearWorkspace: normalizeLinearWorkspace(
+          "linearWorkspace" in json
+            ? (json as { readonly linearWorkspace?: unknown }).linearWorkspace
+            : undefined,
+        ),
       }
     : json
+
+const normalizeLinearWorkspace = (value: unknown): string | undefined => {
+  if (typeof value !== "string") {
+    return undefined
+  }
+
+  const normalized = value.trim().toLowerCase()
+  return normalized.length > 0 ? normalized : undefined
+}
 
 const detectRepo = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
   ChildProcess.make("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], {
