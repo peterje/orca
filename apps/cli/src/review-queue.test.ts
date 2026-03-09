@@ -179,6 +179,7 @@ const pullRequest = (overrides?: Partial<{
   prUrl: "https://github.com/peterje/orca/pull/1",
   repo: "peterje/orca",
   updatedAtMs: 1,
+  waitingForGreptileReviewSinceMs: null,
 })
 
 const feedback = (overrides?: Partial<PullRequestFeedback>): PullRequestFeedback => ({

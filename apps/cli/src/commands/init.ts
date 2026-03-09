@@ -45,6 +45,8 @@ export const commandInit = Command.make(
     yield* Console.log(`Repo: ${config.repo}`)
     yield* Console.log(`Base branch: ${config.baseBranch}`)
     yield* Console.log(`Agent: ${config.agent}`)
+    yield* Console.log(`Greptile poll interval: ${config.greptilePollIntervalSeconds}s`)
+    yield* Console.log(`Max waiting PRs: ${config.maxWaitingPullRequests}`)
     yield* Console.log(`Verification: ${config.verify.length > 0 ? config.verify.join(", ") : "none configured"}`)
   }),
 ).pipe(Command.withDescription("Bootstrap repo-local Orca config under ./.orca/."))

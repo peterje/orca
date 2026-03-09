@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Sink, Stream } from "effect"
+import type { Command as ChildProcessCommand } from "effect/unstable/process/ChildProcess"
 import { ChildProcessSpawner } from "effect/unstable/process"
-import { GitHub, GitHubLayer } from "./github.ts"
+import { GitHub, GitHubLayer, greptileReviewCommentBody } from "./github.ts"
 
 describe("GitHub", () => {
   it.effect("returns none when gh pr view emits no json", () =>
@@ -9,7 +10,7 @@ describe("GitHub", () => {
       const github = yield* GitHub
       const pullRequest = yield* github.viewCurrentPullRequest(process.cwd())
       expect(pullRequest._tag).toBe("None")
-    }).pipe(Effect.provide(makeGitHubLayer(() => ""))))
+    }).pipe(Effect.provide(makeGitHubLayer({ stdout: () => "" }))))
 
   it.effect("parses the current pull request when gh returns json", () =>
     Effect.gen(function* () {
@@ -26,9 +27,9 @@ describe("GitHub", () => {
       })
     }).pipe(
       Effect.provide(
-        makeGitHubLayer(
-          () => '{"number":42,"url":"https://github.com/peterje/orca/pull/42","state":"OPEN","isDraft":true}',
-        ),
+        makeGitHubLayer({
+          stdout: () => '{"number":42,"url":"https://github.com/peterje/orca/pull/42","state":"OPEN","isDraft":true}',
+        }),
       ),
     ))
 
@@ -67,8 +68,8 @@ describe("GitHub", () => {
       })
     }).pipe(
       Effect.provide(
-        makeGitHubLayer(
-          () => JSON.stringify({
+        makeGitHubLayer({
+          stdout: () => JSON.stringify({
             data: {
               repository: {
                 pullRequest: {
@@ -125,18 +126,54 @@ describe("GitHub", () => {
               },
             },
           }),
-        ),
+        }),
       ),
     ))
+
+  it.effect("posts the Greptile review trigger comment", () => {
+    const commands: Array<CommandInvocation> = []
+
+    return Effect.gen(function* () {
+      const github = yield* GitHub
+
+      yield* github.requestPullRequestReview({
+        pullRequestNumber: 42,
+        repo: "peterje/orca",
+      })
+
+      expect(commands).toContainEqual({
+        args: ["pr", "comment", "42", "--repo", "peterje/orca", "--body", greptileReviewCommentBody],
+        command: "gh",
+      })
+    }).pipe(
+      Effect.provide(
+        makeGitHubLayer({
+          onCommand: (command) => {
+            commands.push(command)
+          },
+        }),
+      ),
+    )
+  })
 })
 
-const makeGitHubLayer = (stdout: () => string) =>
+type CommandInvocation = {
+  readonly args: ReadonlyArray<string>
+  readonly command: string
+}
+
+const makeGitHubLayer = (options?: {
+  readonly onCommand?: ((command: CommandInvocation) => void) | undefined
+  readonly stdout?: ((command: CommandInvocation) => string) | undefined
+}) =>
   GitHubLayer.pipe(
     Layer.provide(
       Layer.succeed(
         ChildProcessSpawner.ChildProcessSpawner,
-        ChildProcessSpawner.make(() => {
-          const encoded = new TextEncoder().encode(stdout())
+        ChildProcessSpawner.make((command: ChildProcessCommand) => {
+          const invocation = toCommandInvocation(command)
+          options?.onCommand?.(invocation)
+          const encoded = new TextEncoder().encode(options?.stdout?.(invocation) ?? "")
           return Effect.succeed(ChildProcessSpawner.makeHandle({
             all: Stream.fromIterable([encoded]),
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
@@ -153,3 +190,14 @@ const makeGitHubLayer = (stdout: () => string) =>
       ),
     ),
   )
+
+const toCommandInvocation = (command: ChildProcessCommand): CommandInvocation => {
+  if (command._tag !== "StandardCommand") {
+    throw new Error(`Unexpected command type: ${command._tag}`)
+  }
+
+  return {
+    args: command.args,
+    command: command.command,
+  }
+}

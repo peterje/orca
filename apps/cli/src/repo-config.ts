@@ -12,12 +12,17 @@ export class RepoConfigData extends Schema.Class<RepoConfigData>("orca/RepoConfi
   branchPrefix: Schema.String,
   cleanupWorktreeOnSuccess: Schema.Boolean,
   draftPr: Schema.Boolean,
+  greptilePollIntervalSeconds: Schema.Number,
   linearLabel: Schema.String,
+  maxWaitingPullRequests: Schema.Number,
   repo: Schema.String,
   setup: Schema.Array(Schema.String),
   stallTimeoutMinutes: Schema.Number,
   verify: Schema.Array(Schema.String),
 }) {}
+
+export const defaultGreptilePollIntervalSeconds = 30
+export const defaultMaxWaitingPullRequests = 4
 
 export type RepoConfigService = {
   configPath: Effect.Effect<string>
@@ -58,7 +63,7 @@ export const RepoConfigLive = Effect.gen(function* () {
       try: () => JSON.parse(raw),
       catch: (cause) => new RepoConfigError({ message: `Failed to parse ${file} as JSON.`, cause }),
     })
-    return yield* Schema.decodeUnknownEffect(RepoConfigData)(json).pipe(
+    return yield* Schema.decodeUnknownEffect(RepoConfigData)(normalizeRepoConfig(json)).pipe(
       Effect.mapError((cause) => new RepoConfigError({ message: `Invalid Orca repo config in ${file}.`, cause })),
     )
   })
@@ -109,7 +114,9 @@ export const RepoConfigLive = Effect.gen(function* () {
         branchPrefix: options?.branchPrefix ?? "orca",
         cleanupWorktreeOnSuccess: true,
         draftPr: options?.draftPr ?? true,
+        greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
         linearLabel: options?.linearLabel ?? "Orca",
+        maxWaitingPullRequests: defaultMaxWaitingPullRequests,
         repo,
         setup: ["bun install"],
         stallTimeoutMinutes: 10,
@@ -136,6 +143,15 @@ export class RepoConfigError extends Data.TaggedError("RepoConfigError")<{
   readonly message: string
   readonly cause?: unknown
 }> {}
+
+const normalizeRepoConfig = (json: unknown) =>
+  typeof json === "object" && json !== null
+    ? {
+        greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
+        maxWaitingPullRequests: defaultMaxWaitingPullRequests,
+        ...json,
+      }
+    : json
 
 const detectRepo = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
   ChildProcess.make("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], {
