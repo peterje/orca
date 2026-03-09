@@ -13,6 +13,7 @@ Orca is a Bun + Effect CLI that plans software work from Linear, expands blocker
 - [Bun](https://bun.sh/)
 - [`gh`](https://cli.github.com/) authenticated for the repo you want Orca to open pull requests against
 - A Linear workspace you can authenticate against
+- [`weave`](https://github.com/Ataraxy-Labs/weave) installed locally so Orca can sync tracked pull requests with the base branch before falling back to manual merge-conflict resolution
 
 ### Install dependencies
 
@@ -27,6 +28,14 @@ bun run orca init --repo owner/name
 ```
 
 This creates repo-local Orca config in `./.orca/repo.json` and infers verification commands from `package.json`.
+
+Before Orca starts maintaining tracked pull requests, configure the repo-local weave merge driver:
+
+```bash
+weave setup
+```
+
+Orca expects weave to be available in the repo and will use it when syncing tracked pull request branches with the base branch.
 
 ### Authenticate with Linear
 
@@ -80,7 +89,7 @@ Or continuously execute the top actionable issue:
 bun run orca serve --execute
 ```
 
-In execution mode, Orca creates a git worktree under `./.orca/worktrees/`, runs the configured verification commands, pushes a branch, and opens a draft pull request.
+In execution mode, Orca fetches the latest `origin/<base-branch>`, creates a git worktree under `./.orca/worktrees/` from that remote base to reduce avoidable merge conflicts, runs the configured verification commands, pushes a branch, and opens a draft pull request.
 
 ## Command guide
 

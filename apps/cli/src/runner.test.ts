@@ -410,6 +410,241 @@ describe("Runner", () => {
     })
   })
 
+  it.effect("syncs tracked pull requests with the base branch before new implementation work", () => {
+    const agentRunRequests: Array<{
+      readonly agent: string
+      readonly cwd: string
+      readonly prompt: string
+      readonly promptFilePath: string
+    }> = []
+    const mergeConflictPromptRequests: Array<{
+      readonly baseBranch: string
+      readonly branch: string
+      readonly conflictFiles: ReadonlyArray<string>
+      readonly issueDescription: string
+      readonly issueIdentifier: string
+      readonly issueTitle: string
+      readonly pullRequestUrl: string
+      readonly verify: ReadonlyArray<string>
+    }> = []
+    const requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+    const storedPullRequests: Array<{
+      readonly branch: string
+      readonly greptileCompletedAtMs?: number | null | undefined
+      readonly issueDescription: string
+      readonly issueId: string
+      readonly issueIdentifier: string
+      readonly issueTitle: string
+      readonly prNumber: number
+      readonly prUrl: string
+      readonly repo: string
+      readonly waitingForGreptileReviewSinceMs?: number | null | undefined
+    }> = []
+    const worktreeCommandLog: Array<string> = []
+
+    return withTempDirectory((tempDirectory) => {
+      const worktreeDirectory = join(tempDirectory, "worktree")
+      mkdirSync(worktreeDirectory, { recursive: true })
+
+      return Effect.gen(function* () {
+        const runner = yield* Runner
+        const result = yield* runner.runNext
+
+        expect(result).toMatchObject({
+          issueIdentifier: "ENG-1",
+          mode: "maintenance",
+          pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+        })
+        expect(agentRunRequests).toEqual([])
+        expect(mergeConflictPromptRequests).toEqual([])
+        expect(requestedReviews).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(storedPullRequests[0]).toMatchObject({
+          greptileCompletedAtMs: null,
+          issueIdentifier: "ENG-1",
+          prNumber: 42,
+          repo: "peterje/orca",
+        })
+        expect(typeof storedPullRequests[0]?.waitingForGreptileReviewSinceMs).toBe("number")
+        expect(worktreeCommandLog).toContain("git fetch origin 'main'")
+        expect(worktreeCommandLog).toContain("git merge --no-commit --no-ff 'origin/main'")
+      }).pipe(Effect.provide(makeRunnerLayer({
+        agentRunRequests,
+        currentPullRequest: {
+          isDraft: true,
+          number: 42,
+          state: "OPEN",
+          url: "https://github.com/peterje/orca/pull/42",
+        },
+        issues: [issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "New work" })],
+        mergeConflictPromptRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            mergeStateStatus: "BEHIND",
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        requestedReviews,
+        storedPullRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 10,
+          }),
+        ],
+        worktreeCommandLog,
+        worktreeDirectory,
+      })))
+    })
+  })
+
+  it.effect("lets weave resolve dirty tracked pull request syncs without invoking the agent", () => {
+    const agentRunRequests: Array<{
+      readonly agent: string
+      readonly cwd: string
+      readonly prompt: string
+      readonly promptFilePath: string
+    }> = []
+    const mergeConflictPromptRequests: Array<{
+      readonly baseBranch: string
+      readonly branch: string
+      readonly conflictFiles: ReadonlyArray<string>
+      readonly issueDescription: string
+      readonly issueIdentifier: string
+      readonly issueTitle: string
+      readonly pullRequestUrl: string
+      readonly verify: ReadonlyArray<string>
+    }> = []
+
+    return withTempDirectory((tempDirectory) => {
+      const worktreeDirectory = join(tempDirectory, "worktree")
+      mkdirSync(worktreeDirectory, { recursive: true })
+
+      return Effect.gen(function* () {
+        const runner = yield* Runner
+        const result = yield* runner.runNext
+
+        expect(result).toMatchObject({
+          issueIdentifier: "ENG-1",
+          mode: "maintenance",
+          pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+        })
+        expect(agentRunRequests).toEqual([])
+        expect(mergeConflictPromptRequests).toEqual([])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        agentRunRequests,
+        currentPullRequest: {
+          isDraft: true,
+          number: 42,
+          state: "OPEN",
+          url: "https://github.com/peterje/orca/pull/42",
+        },
+        mergeConflictPromptRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            mergeStateStatus: "DIRTY",
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 10,
+          }),
+        ],
+        worktreeDirectory,
+      })))
+    })
+  })
+
+  it.effect("falls back to the agent when weave leaves merge conflicts unresolved", () => {
+    const agentRunRequests: Array<{
+      readonly agent: string
+      readonly cwd: string
+      readonly prompt: string
+      readonly promptFilePath: string
+    }> = []
+    const mergeConflictPromptRequests: Array<{
+      readonly baseBranch: string
+      readonly branch: string
+      readonly conflictFiles: ReadonlyArray<string>
+      readonly issueDescription: string
+      readonly issueIdentifier: string
+      readonly issueTitle: string
+      readonly pullRequestUrl: string
+      readonly verify: ReadonlyArray<string>
+    }> = []
+
+    return withTempDirectory((tempDirectory) => {
+      const worktreeDirectory = join(tempDirectory, "worktree")
+      mkdirSync(worktreeDirectory, { recursive: true })
+
+      return Effect.gen(function* () {
+        const runner = yield* Runner
+        const result = yield* runner.runNext
+
+        expect(result).toMatchObject({
+          issueIdentifier: "ENG-1",
+          mode: "maintenance",
+          pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+        })
+        expect(agentRunRequests).toHaveLength(1)
+        expect(agentRunRequests[0]?.prompt).toBe("Resolve the merge conflicts.")
+        expect(mergeConflictPromptRequests).toEqual([
+          {
+            baseBranch: "main",
+            branch: "orca/eng-1-example-issue",
+            conflictFiles: ["apps/cli/src/runner.ts"],
+            issueDescription: "Example issue description",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+            verify: ["bun run check"],
+          },
+        ])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        agentRunRequests,
+        baseSyncMergeExitCode: 1,
+        currentPullRequest: {
+          isDraft: true,
+          number: 42,
+          state: "OPEN",
+          url: "https://github.com/peterje/orca/pull/42",
+        },
+        mergeConflictPromptRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            mergeStateStatus: "DIRTY",
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 10,
+          }),
+        ],
+        unresolvedConflictFiles: ["apps/cli/src/runner.ts"],
+        unresolvedConflictFilesAfterFirstRead: [],
+        worktreeDirectory,
+      })))
+    })
+  })
+
   it.effect("prioritizes actionable review work ahead of new implementation work", () =>
     withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -725,6 +960,13 @@ describe("Runner", () => {
 })
 
 const makeRunnerLayer = (options: {
+  readonly agentRunRequests?: Array<{
+    readonly agent: string
+    readonly cwd: string
+    readonly prompt: string
+    readonly promptFilePath: string
+  }>
+  readonly baseSyncMergeExitCode?: number
   readonly createdPullRequests?: Array<{
     readonly baseBranch: string
     readonly body: string
@@ -742,6 +984,16 @@ const makeRunnerLayer = (options: {
     readonly repo: string
   }>
   readonly markGreptileCompletedReturnsNull?: boolean
+  readonly mergeConflictPromptRequests?: Array<{
+    readonly baseBranch: string
+    readonly branch: string
+    readonly conflictFiles: ReadonlyArray<string>
+    readonly issueDescription: string
+    readonly issueIdentifier: string
+    readonly issueTitle: string
+    readonly pullRequestUrl: string
+    readonly verify: ReadonlyArray<string>
+  }>
   readonly issues?: ReadonlyArray<LinearIssue>
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
   readonly removedPullRequests?: Array<string>
@@ -784,10 +1036,27 @@ const makeRunnerLayer = (options: {
     readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }>
   readonly trackedPullRequests?: ReadonlyArray<OrcaManagedPullRequest>
+  readonly unresolvedConflictFiles?: ReadonlyArray<string>
+  readonly unresolvedConflictFilesAfterFirstRead?: ReadonlyArray<string>
+  readonly weaveDriver?: string | null | undefined
+  readonly weaveVersionExitCode?: number
+  readonly worktreeCommandLog?: Array<string>
   readonly worktreeDirectory: string
+  readonly worktreeStatus?: string
 }) => {
-  const worktree = makeManagedWorktree(options.worktreeDirectory)
+  const worktree = makeManagedWorktree({
+    baseSyncMergeExitCode: options.baseSyncMergeExitCode,
+    directory: options.worktreeDirectory,
+    unresolvedConflictFiles: options.unresolvedConflictFiles,
+    unresolvedConflictFilesAfterFirstRead: options.unresolvedConflictFilesAfterFirstRead,
+    weaveDriver: options.weaveDriver,
+    weaveVersionExitCode: options.weaveVersionExitCode,
+    worktreeCommandLog: options.worktreeCommandLog,
+    worktreeStatus: options.worktreeStatus,
+  })
+  const agentRunRequests = options.agentRunRequests ?? []
   const createdPullRequests = options.createdPullRequests ?? []
+  const mergeConflictPromptRequests = options.mergeConflictPromptRequests ?? []
   const removedPullRequests = options.removedPullRequests ?? []
   const greptileCompletedPullRequests = options.greptileCompletedPullRequests ?? []
   const readPullRequestFeedbackRequests = options.readPullRequestFeedbackRequests ?? []
@@ -806,7 +1075,15 @@ const makeRunnerLayer = (options: {
         Layer.succeed(
           AgentRunner,
           AgentRunner.of({
-            run: () => Effect.void,
+            run: (request) =>
+              Effect.sync(() => {
+                agentRunRequests.push({
+                  agent: request.agent,
+                  cwd: request.cwd,
+                  prompt: request.prompt,
+                  promptFilePath: request.promptFilePath,
+                })
+              }),
           }),
         ),
         Layer.succeed(
@@ -869,6 +1146,14 @@ const makeRunnerLayer = (options: {
               Effect.succeed({
                 prompt: "Implement the issue.",
                 promptFileContents: "# Linear issue\n\nIdentifier: ENG-1\n",
+              }),
+            buildMergeConflictPrompt: (request) =>
+              Effect.sync(() => {
+                mergeConflictPromptRequests.push(request)
+                return {
+                  prompt: "Resolve the merge conflicts.",
+                  promptFileContents: "# Pull request merge conflict\n\nIdentifier: ENG-1\n",
+                }
               }),
             buildReviewPrompt: (request) =>
               Effect.sync(() => {
@@ -1057,6 +1342,7 @@ const pullRequestFeedback = (overrides?: Partial<PullRequestFeedback>): PullRequ
   comments: overrides?.comments ?? [],
   isDraft: overrides?.isDraft ?? true,
   labels: overrides?.labels ?? [],
+  mergeStateStatus: overrides?.mergeStateStatus ?? "CLEAN",
   number: overrides?.number ?? 1,
   reviewThreads: overrides?.reviewThreads ?? [],
   reviews: overrides?.reviews ?? [],
@@ -1094,21 +1380,53 @@ const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][
   path: overrides?.path ?? "apps/cli/src/runner.ts",
 })
 
-const makeManagedWorktree = (directory: string): ManagedWorktree => ({
-  branch: "orca/eng-1-example-issue",
-  directory,
-  remove: Effect.void,
-  run: () => Effect.succeed(0),
-  runString: (command) => {
-    if (command === "git status --porcelain --untracked-files=all") {
-      return Effect.succeed(" M apps/cli/src/runner.ts\n")
-    }
-    if (command.startsWith("git rev-list --count ")) {
-      return Effect.succeed("0\n")
-    }
-    return Effect.die(`Unexpected command: ${command}`)
-  },
-})
+const makeManagedWorktree = (options: {
+  readonly baseSyncMergeExitCode?: number | undefined
+  readonly directory: string
+  readonly unresolvedConflictFiles?: ReadonlyArray<string> | undefined
+  readonly unresolvedConflictFilesAfterFirstRead?: ReadonlyArray<string> | undefined
+  readonly weaveDriver?: string | null | undefined
+  readonly weaveVersionExitCode?: number | undefined
+  readonly worktreeCommandLog?: Array<string> | undefined
+  readonly worktreeStatus?: string | undefined
+}): ManagedWorktree => {
+  let unresolvedConflictReadCount = 0
+
+  return {
+    branch: "orca/eng-1-example-issue",
+    directory: options.directory,
+    remove: Effect.void,
+    run: (command) =>
+      Effect.sync(() => {
+        options.worktreeCommandLog?.push(command)
+        if (command === "weave --version >/dev/null 2>&1") {
+          return options.weaveVersionExitCode ?? 0
+        }
+        if (command.startsWith("git merge --no-commit --no-ff ")) {
+          return options.baseSyncMergeExitCode ?? 0
+        }
+        return 0
+      }),
+    runString: (command) => {
+      if (command === "git status --porcelain --untracked-files=all") {
+        return Effect.succeed(options.worktreeStatus ?? " M apps/cli/src/runner.ts\n")
+      }
+      if (command === "git config --get merge.weave.driver") {
+        return Effect.succeed(options.weaveDriver === null ? "" : `${options.weaveDriver ?? "/usr/local/bin/weave-driver"}\n`)
+      }
+      if (command === "git diff --name-only --diff-filter=U") {
+        unresolvedConflictReadCount += 1
+        return Effect.succeed(
+          (unresolvedConflictReadCount === 1 ? options.unresolvedConflictFiles : options.unresolvedConflictFilesAfterFirstRead)?.join("\n") ?? "",
+        )
+      }
+      if (command.startsWith("git rev-list --count ")) {
+        return Effect.succeed("0\n")
+      }
+      return Effect.die(`Unexpected command: ${command}`)
+    },
+  }
+}
 
 const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "identifier" | "title">): LinearIssue => ({
   blockedBy: overrides.blockedBy ?? [],
