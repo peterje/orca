@@ -1,7 +1,5 @@
-import { Console, Duration, Effect, Result } from "effect"
+import { Console, Duration, Effect, Option, Result } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
-import { planIssues } from "../issue-planner.ts"
-import { Linear } from "../linear.ts"
 import { RunState } from "../run-state.ts"
 import { Runner } from "../runner.ts"
 
@@ -19,7 +17,7 @@ export const commandServe = Command.make(
     ),
   },
   Effect.fn("commandServe")(function* ({ execute, intervalSeconds }) {
-    const linear = yield* Linear
+    const runner = yield* Runner
     let previousTopIssueId: string | null = null
     let emptyPolls = 0
     let previouslyActiveRunId: string | null = null
@@ -39,26 +37,28 @@ export const commandServe = Command.make(
         previouslyActiveRunId = null
       }
 
-      const issues = yield* linear.issues
-      const plan = planIssues(issues)
-      const topIssue = plan.actionable[0]
+      const topWork = yield* runner.peekNext.pipe(Effect.map(Option.getOrNull))
 
-      if (topIssue) {
+      if (topWork) {
         emptyPolls = 0
         if (execute) {
-          const runner = yield* Runner
           const result = yield* runner.runNext.pipe(Effect.result)
           yield* Result.match(result, {
             onFailure: (error) => {
               const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)
               return Console.log(`Run failed: ${message}`)
             },
-            onSuccess: (value) => Console.log(`Opened PR for ${value.issueIdentifier}: ${value.pullRequestUrl}`),
+            onSuccess: (value) =>
+              Console.log(`${value.mode === "review" ? "Updated" : "Opened"} PR for ${value.issueIdentifier}: ${value.pullRequestUrl}`),
           })
           previousTopIssueId = null
-        } else if (topIssue.id !== previousTopIssueId) {
-          yield* Console.log(`Would implement: ${topIssue.identifier} ${topIssue.title}`)
-          previousTopIssueId = topIssue.id
+        } else if (topWork.id !== previousTopIssueId) {
+          yield* Console.log(
+            topWork.kind === "review"
+              ? `Would review: ${topWork.issueIdentifier} ${topWork.title} (${topWork.pullRequestUrl})`
+              : `Would implement: ${topWork.issueIdentifier} ${topWork.title}`,
+          )
+          previousTopIssueId = topWork.id
         }
       } else {
         emptyPolls += 1

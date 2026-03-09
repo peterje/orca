@@ -12,6 +12,19 @@ export type PromptGenService = {
     readonly prompt: string
     readonly promptFileContents: string
   }, PromptGenError>
+  buildReviewPrompt: (options: {
+    readonly baseBranch: string
+    readonly branch: string
+    readonly issueDescription: string
+    readonly issueIdentifier: string
+    readonly issueTitle: string
+    readonly pullRequestUrl: string
+    readonly reviewFeedback: string
+    readonly verify: ReadonlyArray<string>
+  }) => Effect.Effect<{
+    readonly prompt: string
+    readonly promptFileContents: string
+  }, PromptGenError>
 }
 
 export const PromptGen = ServiceMap.Service<PromptGenService>("orca/PromptGen")
@@ -73,7 +86,69 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
       return { prompt, promptFileContents }
     })
 
-  return PromptGen.of({ buildImplementationPrompt })
+  const buildReviewPrompt = (options: {
+    readonly baseBranch: string
+    readonly branch: string
+    readonly issueDescription: string
+    readonly issueIdentifier: string
+    readonly issueTitle: string
+    readonly pullRequestUrl: string
+    readonly reviewFeedback: string
+    readonly verify: ReadonlyArray<string>
+  }) =>
+    Effect.gen(function* () {
+      const repoInstructions = yield* readAgentsInstructions(fs)
+      const prompt = `Address the attached pull request review feedback in the current repository without asking for permission.`
+      const promptFileContents = `# Pull request review
+
+Identifier: ${options.issueIdentifier}
+Title: ${options.issueTitle}
+
+## Original issue description
+
+${options.issueDescription.trim().length > 0 ? options.issueDescription : "No description provided."}
+
+## Existing pull request
+
+- URL: ${options.pullRequestUrl}
+- Branch: ${options.branch}
+
+## Review feedback
+
+${options.reviewFeedback}
+
+## Repo instructions
+
+${repoInstructions}
+
+## Orca execution constraints
+
+- Work only in the current worktree on branch \`${options.branch}\`.
+- Base branch is \`${options.baseBranch}\`.
+- Address the requested review feedback and keep the existing pull request moving.
+- Do not ask for permission; pick reasonable defaults and keep going.
+- Do not mutate unrelated git state.
+- Do not commit secrets or any files under \`.orca/\`.
+- Prefer a conventional commit if you create a commit.
+- Keep using the existing branch and pull request.
+
+## Verification commands
+
+${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``).join("\n") : "- No repo-specific verification commands configured."}
+
+## Required git outcome
+
+- Have the existing branch ready for another human review pass.
+- If you commit, use a conventional commit message.
+- Update the existing pull request instead of creating a new branch or pull request.
+- Keep the pull request title unchanged.
+- Mention the verification commands you ran in any pull request update you make.
+`
+
+      return { prompt, promptFileContents }
+    })
+
+  return PromptGen.of({ buildImplementationPrompt, buildReviewPrompt })
 })
 
 export const PromptGenLayer = Layer.effect(PromptGen, PromptGenLive)

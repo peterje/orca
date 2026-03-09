@@ -31,6 +31,101 @@ describe("GitHub", () => {
         ),
       ),
     ))
+
+  it.effect("reads pull request review feedback", () =>
+    Effect.gen(function* () {
+      const github = yield* GitHub
+      const feedback = yield* github.readPullRequestFeedback({
+        pullRequestNumber: 42,
+        repo: "peterje/orca",
+      })
+
+      expect(feedback).toMatchObject({
+        labels: ["orca-review"],
+        number: 42,
+        reviews: [
+          {
+            authorLogin: "reviewer",
+            body: "Please tighten this up.",
+          },
+        ],
+        state: "OPEN",
+        url: "https://github.com/peterje/orca/pull/42",
+      })
+      expect(feedback.reviewThreads[0]).toMatchObject({
+        comments: [
+          {
+            authorLogin: "reviewer",
+            body: "@orca please revisit this branch.",
+            originalLine: 12,
+            path: "apps/cli/src/runner.ts",
+          },
+        ],
+        isCollapsed: false,
+        isResolved: false,
+      })
+    }).pipe(
+      Effect.provide(
+        makeGitHubLayer(
+          () => JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    nodes: [
+                      {
+                        author: { login: "commenter" },
+                        body: "General note",
+                        createdAt: "2026-01-01T00:00:00.000Z",
+                        id: "comment-1",
+                      },
+                    ],
+                  },
+                  isDraft: true,
+                  labels: {
+                    nodes: [{ name: "orca-review" }],
+                  },
+                  number: 42,
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        comments: {
+                          nodes: [
+                            {
+                              author: { login: "reviewer" },
+                              body: "@orca please revisit this branch.",
+                              createdAt: "2026-01-02T00:00:00.000Z",
+                              diffHunk: "@@ -1,1 +1,1 @@",
+                              id: "thread-comment-1",
+                              originalLine: 12,
+                              path: "apps/cli/src/runner.ts",
+                            },
+                          ],
+                        },
+                        isCollapsed: false,
+                        isResolved: false,
+                      },
+                    ],
+                  },
+                  reviews: {
+                    nodes: [
+                      {
+                        author: { login: "reviewer" },
+                        body: "Please tighten this up.",
+                        createdAt: "2026-01-03T00:00:00.000Z",
+                        id: "review-1",
+                      },
+                    ],
+                  },
+                  state: "OPEN",
+                  url: "https://github.com/peterje/orca/pull/42",
+                },
+              },
+            },
+          }),
+        ),
+      ),
+    ))
 })
 
 const makeGitHubLayer = (stdout: () => string) =>

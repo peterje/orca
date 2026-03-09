@@ -8,9 +8,9 @@ const commandRunNext = Command.make(
   Effect.fn("commandRunNext")(function* () {
     const runner = yield* Runner
     const result = yield* runner.runNext
-    yield* Console.log(`Opened PR for ${result.issueIdentifier}: ${result.pullRequestUrl}`)
+    yield* Console.log(`${result.mode === "review" ? "Updated" : "Opened"} PR for ${result.issueIdentifier}: ${result.pullRequestUrl}`)
   }),
-).pipe(Command.withDescription("Execute the top actionable Linear issue once."))
+).pipe(Command.withDescription("Execute the next Orca work item once."))
 
 export const commandRun = Command.make("run").pipe(
   Command.withDescription("Execute Orca work from Linear."),
