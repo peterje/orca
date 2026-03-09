@@ -489,11 +489,11 @@ const finalizeGitAndPullRequest = (options: {
 
     const pullRequest = yield* options.github.createPullRequest({
       baseBranch: options.config.baseBranch,
-      body: makePullRequestBody(options.issueIdentifier, options.config.verify),
+      body: makePullRequestBody(options.issueIdentifier, options.issueTitle, options.config.verify),
       cwd: options.worktree.directory,
       draft: options.config.draftPr,
       repo: options.config.repo,
-      title: `${options.issueIdentifier}: ${options.issueTitle}`,
+      title: makePullRequestTitle(options.issueTitle),
     }).pipe(Effect.mapError(toRunnerFailure))
 
     return {
@@ -545,18 +545,29 @@ const makeImplementationCommitMessage = (issue: PlannedIssue) =>
 const makeReviewCommitMessage = (pullRequest: OrcaManagedPullRequest) =>
   `fix: address ${pullRequest.issueIdentifier.toLowerCase()} review feedback`
 
-const makePullRequestBody = (issueIdentifier: string, verify: ReadonlyArray<string>) =>
+const makePullRequestTitle = (issueTitle: string) =>
+  `feat: ${normalizePullRequestText(issueTitle)}`
+
+const makePullRequestBody = (issueIdentifier: string, issueTitle: string, verify: ReadonlyArray<string>) =>
   [
-    "## Summary",
-    `- Implement ${issueIdentifier} automatically with Orca.`,
+    `this pr implements ${issueIdentifier} by addressing ${normalizePullRequestText(issueTitle)}, so the requested change is ready for review in orca's normal flow.`,
     "",
-    "## Verification",
+    "### changes",
+    "#### 1. deliver the requested issue work",
+    "this update delivers the requested behavior while keeping the branch aligned with the repository's automation and review expectations.",
+    "",
+    "### verification",
     ...(verify.length > 0
       ? verify.map((command) => `- \`${command}\``)
-      : ["- No verification commands were configured."]),
+      : ["- no verification commands were configured."]),
     "",
-    `Refs ${issueIdentifier}`,
+    `closes ${issueIdentifier}`,
   ].join("\n")
+
+const normalizePullRequestText = (value: string) => {
+  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase()
+  return normalized.length > 0 ? normalized : "the requested change"
+}
 
 const comparePendingReviews = (left: PendingPullRequestReview, right: PendingPullRequestReview) =>
   right.latestFeedbackAtMs - left.latestFeedbackAtMs

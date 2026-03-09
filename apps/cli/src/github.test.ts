@@ -33,6 +33,60 @@ describe("GitHub", () => {
       ),
     ))
 
+  it.effect("creates pull requests through gh with a heredoc body", () => {
+    const commands: Array<CommandInvocation> = []
+
+    return Effect.gen(function* () {
+      const github = yield* GitHub
+
+      const pullRequest = yield* github.createPullRequest({
+        baseBranch: "main",
+        body: [
+          "this pr implements ENG-1 by addressing example issue, so the requested change is ready for review in orca's normal flow.",
+          "",
+          "### changes",
+          "#### 1. deliver the requested issue work",
+          "this update delivers the requested behavior while keeping the branch aligned with the repository's automation and review expectations.",
+          "",
+          "### verification",
+          "- `bun run check`",
+          "",
+          "closes ENG-1",
+        ].join("\n"),
+        cwd: process.cwd(),
+        draft: true,
+        repo: "peterje/orca",
+        title: "feat: example issue",
+      })
+
+      expect(pullRequest).toMatchObject({
+        isDraft: true,
+        number: 42,
+        state: "OPEN",
+        url: "https://github.com/peterje/orca/pull/42",
+      })
+
+      const createCommand = commands.find((command) => command.command === "/bin/bash")
+      expect(createCommand?.args[0]).toBe("-lc")
+      expect(createCommand?.args[1]).toContain("gh pr create --draft --repo 'peterje/orca' --base 'main' --title 'feat: example issue'")
+      expect(createCommand?.args[1]).toContain("--body \"$(cat <<'ORCA_PR_BODY'")
+      expect(createCommand?.args[1]).toContain("### changes")
+      expect(createCommand?.args[1]).toContain("closes ENG-1")
+    }).pipe(
+      Effect.provide(
+        makeGitHubLayer({
+          onCommand: (command) => {
+            commands.push(command)
+          },
+          stdout: (command) =>
+            command.command === "gh" && command.args[0] === "pr" && command.args[1] === "view"
+              ? '{"number":42,"url":"https://github.com/peterje/orca/pull/42","state":"OPEN","isDraft":true}'
+              : "",
+        }),
+      ),
+    )
+  })
+
   it.effect("reads pull request review feedback", () =>
     Effect.gen(function* () {
       const github = yield* GitHub

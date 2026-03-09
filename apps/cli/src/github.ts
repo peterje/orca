@@ -1,5 +1,6 @@
 import { Data, Effect, Layer, Option, ServiceMap } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { makeShellCommand } from "./shared/shell.ts"
 
 export type PullRequestInfo = {
   readonly isDraft: boolean
@@ -129,27 +130,12 @@ export const GitHubLive = Effect.gen(function* () {
     readonly repo: string
     readonly title: string
   }) =>
-    ChildProcess.make(
-      "gh",
-      [
-        "pr",
-        "create",
-        ...(options.draft ? ["--draft"] : []),
-        "--repo",
-        options.repo,
-        "--base",
-        options.baseBranch,
-        "--title",
-        options.title,
-        "--body",
-        options.body,
-      ],
-      {
-        cwd: options.cwd,
-        stderr: "pipe",
-        stdout: "pipe",
-      },
-    ).pipe(
+    makeShellCommand({
+      command: makeCreatePullRequestCommand(options),
+      cwd: options.cwd,
+      stderr: "pipe",
+      stdout: "pipe",
+    }).pipe(
       spawner.string,
       Effect.map((value) => value.trim()),
       Effect.flatMap(() => viewCurrentPullRequest(options.cwd)),
@@ -291,6 +277,43 @@ export class GitHubError extends Data.TaggedError("GitHubError")<{
 }> {}
 
 const commonBotUserPrefixes = ["dependabot", "github", "changeset", "renovate", "snyk", "coderabbit"]
+
+const makeCreatePullRequestCommand = (options: {
+  readonly baseBranch: string
+  readonly body: string
+  readonly draft: boolean
+  readonly repo: string
+  readonly title: string
+}) => {
+  const heredocDelimiter = makeHeredocDelimiter(options.body)
+
+  return [
+    "gh pr create",
+    ...(options.draft ? ["--draft"] : []),
+    "--repo",
+    shellQuote(options.repo),
+    "--base",
+    shellQuote(options.baseBranch),
+    "--title",
+    shellQuote(options.title),
+    `--body "$(cat <<'${heredocDelimiter}'\n${options.body}\n${heredocDelimiter}\n)"`,
+  ].join(" ")
+}
+
+const makeHeredocDelimiter = (body: string) => {
+  const lines = body.split("\n")
+
+  for (let index = 0; index < 1_000; index += 1) {
+    const delimiter = index === 0 ? "ORCA_PR_BODY" : `ORCA_PR_BODY_${index}`
+    if (!lines.includes(delimiter)) {
+      return delimiter
+    }
+  }
+
+  return "ORCA_PR_BODY"
+}
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, `"'"'`)}'`
 
 const parseRepo = (repo: string) => {
   const [owner, name, ...rest] = repo.split("/")

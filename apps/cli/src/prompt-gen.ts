@@ -42,6 +42,7 @@ export const PromptGenLive = Effect.gen(function* () {
     Effect.gen(function* () {
       const repoInstructions = yield* readAgentsInstructions(fs)
       const dependencyGraph = renderDependencyGraph(options.plan.work).join("\n")
+      const examplePullRequestTitle = makeExamplePullRequestTitle(options.issue.title)
       const prompt = `Implement the attached Linear issue in the current repository without asking for permission.`
       const promptFileContents = `# Linear issue
 
@@ -75,12 +76,19 @@ ${repoInstructions}
 
 ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``).join("\n") : "- No repo-specific verification commands configured."}
 
+## Pull request guidance
+
+- Use a conventional commit title in lowercase if you open a pull request, for example \`${examplePullRequestTitle}\`.
+- Keep the pull request body in lowercase narrative prose that explains what changed and why.
+- Use only \`###\` and \`####\` headings in the pull request body.
+- Use \`gh pr create\` with a HEREDOC so multi-line formatting is preserved.
+- End the pull request body with \`closes ${options.issue.identifier}\`.
+
 ## Required git outcome
 
 - Have the branch ready for review.
 - If you commit, use a conventional commit message.
-- If you open a PR, use the title \`${options.issue.identifier}: ${options.issue.title}\`.
-- Include a brief summary, the verification commands you ran, and \`Refs ${options.issue.identifier}\` in the PR body.
+- If you open a PR, follow the pull request guidance above.
 `
 
       return { prompt, promptFileContents }
@@ -142,7 +150,7 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 - If you commit, use a conventional commit message.
 - Update the existing pull request instead of creating a new branch or pull request.
 - Keep the pull request title unchanged.
-- Mention the verification commands you ran in any pull request update you make.
+- If you update the pull request description, keep the existing lower-case narrative style and mention the verification commands you ran.
 `
 
       return { prompt, promptFileContents }
@@ -168,3 +176,10 @@ const readAgentsInstructions = (fs: FileSystem.FileSystem) =>
       Effect.mapError((cause) => new PromptGenError({ message: "Failed to read AGENTS.md.", cause })),
     )
   })
+
+const makeExamplePullRequestTitle = (issueTitle: string) => `feat: ${normalizePullRequestText(issueTitle)}`
+
+const normalizePullRequestText = (value: string) => {
+  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase()
+  return normalized.length > 0 ? normalized : "the requested change"
+}

@@ -29,6 +29,14 @@ const testFileSystemLayer = Layer.succeed(FileSystem.FileSystem, {
 
 describe("Runner", () => {
   it.effect("requests Greptile review and records the waiting state for new pull requests", () => {
+    const createdPullRequests: Array<{
+      readonly baseBranch: string
+      readonly body: string
+      readonly cwd: string
+      readonly draft: boolean
+      readonly repo: string
+      readonly title: string
+    }> = []
     const requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
     const storedPullRequests: Array<{
       readonly branch: string
@@ -55,6 +63,27 @@ describe("Runner", () => {
           mode: "implementation",
           pullRequestUrl: "https://github.com/peterje/orca/pull/42",
         })
+        expect(createdPullRequests).toEqual([
+          {
+            baseBranch: "main",
+            body: [
+              "this pr implements ENG-1 by addressing example issue, so the requested change is ready for review in orca's normal flow.",
+              "",
+              "### changes",
+              "#### 1. deliver the requested issue work",
+              "this update delivers the requested behavior while keeping the branch aligned with the repository's automation and review expectations.",
+              "",
+              "### verification",
+              "- `bun run check`",
+              "",
+              "closes ENG-1",
+            ].join("\n"),
+            cwd: worktreeDirectory,
+            draft: true,
+            repo: "peterje/orca",
+            title: "feat: example issue",
+          },
+        ])
         expect(requestedReviews).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
         expect(storedPullRequests).toHaveLength(1)
         expect(storedPullRequests[0]).toMatchObject({
@@ -64,12 +93,20 @@ describe("Runner", () => {
         })
         expect(typeof storedPullRequests[0]?.waitingForGreptileReviewSinceMs).toBe("number")
         expect(readFileSync(join(worktreeDirectory, ".orca/issue.md"), "utf8")).toContain("Identifier: ENG-1")
-      }).pipe(Effect.provide(makeRunnerLayer({ requestedReviews, storedPullRequests, worktreeDirectory })))
+      }).pipe(Effect.provide(makeRunnerLayer({ createdPullRequests, requestedReviews, storedPullRequests, worktreeDirectory })))
     })
   })
 })
 
 const makeRunnerLayer = (options: {
+  readonly createdPullRequests: Array<{
+    readonly baseBranch: string
+    readonly body: string
+    readonly cwd: string
+    readonly draft: boolean
+    readonly repo: string
+    readonly title: string
+  }>
   readonly requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
   readonly storedPullRequests: Array<{
     readonly branch: string
@@ -99,12 +136,16 @@ const makeRunnerLayer = (options: {
         Layer.succeed(
           GitHub,
           GitHub.of({
-            createPullRequest: () => Effect.succeed({
-              isDraft: true,
-              number: 42,
-              state: "OPEN",
-              url: "https://github.com/peterje/orca/pull/42",
-            }),
+            createPullRequest: (request) =>
+              Effect.sync(() => {
+                options.createdPullRequests.push(request)
+                return {
+                  isDraft: true,
+                  number: 42,
+                  state: "OPEN",
+                  url: "https://github.com/peterje/orca/pull/42",
+                }
+              }),
             detectRepo: Effect.die("not used in this test"),
             readPullRequestFeedback: () => Effect.die("not used in this test"),
             removePullRequestLabel: () => Effect.die("not used in this test"),
