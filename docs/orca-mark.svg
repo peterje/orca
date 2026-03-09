@@ -1,0 +1,31 @@
+<svg width="640" height="320" viewBox="0 0 640 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="orca-title orca-desc">
+  <title id="orca-title">Orca project mark</title>
+  <desc id="orca-desc">A stylized orca and ship over ocean waves, representing Orca moving work through the software delivery flow.</desc>
+  <defs>
+    <linearGradient id="bg" x1="72" y1="36" x2="568" y2="284" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071A26" />
+      <stop offset="1" stop-color="#10374C" />
+    </linearGradient>
+    <linearGradient id="moon" x1="196" y1="52" x2="444" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7CE7F2" />
+      <stop offset="1" stop-color="#26B5CE" />
+    </linearGradient>
+    <linearGradient id="sea" x1="96" y1="180" x2="544" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F4E63" />
+      <stop offset="1" stop-color="#0A6A83" />
+    </linearGradient>
+  </defs>
+  <rect x="20" y="20" width="600" height="280" rx="36" fill="url(#bg)" />
+  <circle cx="230" cy="126" r="74" fill="url(#moon)" opacity="0.95" />
+  <path d="M92 228C133 208 178 206 225 214C280 223 321 249 381 248C431 247 467 224 515 214C549 207 575 210 601 222V264H92V228Z" fill="url(#sea)" />
+  <path d="M85 249C120 234 155 229 191 231C236 234 273 257 322 257C373 257 409 235 456 230C508 224 551 235 601 255" stroke="#7CE7F2" stroke-width="6" stroke-linecap="round" opacity="0.7" />
+  <path d="M350 177C381 148 431 145 469 169C494 185 494 207 470 216C454 222 435 220 420 213C402 205 390 204 368 210C343 216 330 212 324 201C318 191 326 183 350 177Z" fill="#0A1017" />
+  <path d="M390 163C399 138 419 119 443 111C433 137 425 153 414 168L390 163Z" fill="#0A1017" />
+  <path d="M422 186C435 180 450 181 462 188C453 197 442 202 431 202C424 202 418 198 422 186Z" fill="#F4FBFF" />
+  <path d="M463 164L505 149L522 159L496 170L463 164Z" fill="#D5EEF5" />
+  <path d="M468 142L505 127L543 147L507 151L468 142Z" fill="#F4FBFF" />
+  <path d="M483 126L496 100L519 122L483 126Z" fill="#26B5CE" />
+  <circle cx="448" cy="184" r="4" fill="#0A1017" />
+  <path d="M184 150C214 139 246 137 284 143C316 148 343 160 362 179" stroke="#B9F7FF" stroke-width="8" stroke-linecap="round" opacity="0.45" />
+  <path d="M135 190C166 175 209 171 250 177" stroke="#B9F7FF" stroke-width="5" stroke-linecap="round" opacity="0.4" />
+</svg>
