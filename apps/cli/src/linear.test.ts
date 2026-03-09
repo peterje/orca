@@ -89,6 +89,88 @@ describe("Linear", () => {
       ),
     )
   })
+
+  it.effect("does not move issue when only a review state exists", () => {
+    const issueUpdates: Array<Record<string, unknown>> = []
+
+    return Effect.gen(function* () {
+      const linear = yield* Linear
+      const issues = yield* linear.issues
+
+      yield* linear.markIssueInProgress(issues.find((issue) => issue.identifier === "ENG-1")!)
+
+      expect(issueUpdates).toEqual([])
+    }).pipe(
+      Effect.provide(
+        makeLinearTestLayer(
+          makeGraphqlClient({
+            issueNodeOverrides: {
+              team: {
+                states: {
+                  nodes: [
+                    {
+                      id: "state-review",
+                      name: "In Review",
+                      type: "started",
+                    },
+                  ],
+                },
+              },
+            },
+            onIssueUpdate: (variables) => {
+              issueUpdates.push(variables)
+            },
+          }),
+        ),
+      ),
+    )
+  })
+
+  it.effect("ignores non-started states named in progress", () => {
+    const issueUpdates: Array<Record<string, unknown>> = []
+
+    return Effect.gen(function* () {
+      const linear = yield* Linear
+      const issues = yield* linear.issues
+
+      yield* linear.markIssueInProgress(issues.find((issue) => issue.identifier === "ENG-1")!)
+
+      expect(issueUpdates).toEqual([
+        {
+          id: "direct-1",
+          stateId: "state-doing",
+        },
+      ])
+    }).pipe(
+      Effect.provide(
+        makeLinearTestLayer(
+          makeGraphqlClient({
+            issueNodeOverrides: {
+              team: {
+                states: {
+                  nodes: [
+                    {
+                      id: "state-progress",
+                      name: "In Progress",
+                      type: "unstarted",
+                    },
+                    {
+                      id: "state-doing",
+                      name: "Doing",
+                      type: "started",
+                    },
+                  ],
+                },
+              },
+            },
+            onIssueUpdate: (variables) => {
+              issueUpdates.push(variables)
+            },
+          }),
+        ),
+      ),
+    )
+  })
 })
 
 const makeLinearTestLayer = (httpClientLayer: Layer.Layer<HttpClient.HttpClient>) =>

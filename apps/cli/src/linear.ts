@@ -330,7 +330,9 @@ const compareLinearIssues = (left: LinearIssue, right: LinearIssue) =>
   right.createdAtMs - left.createdAtMs || left.identifier.localeCompare(right.identifier)
 
 const findInProgressState = (teamStates: ReadonlyArray<LinearWorkflowState>) => {
-  const namedMatch = teamStates.find((state) => normalizeWorkflowStateName(state.name) === "in progress")
+  const namedMatch = teamStates.find(
+    (state) => state.type.toLowerCase() === "started" && normalizeWorkflowStateName(state.name) === "in progress",
+  )
   if (namedMatch) {
     return namedMatch
   }
