@@ -11,6 +11,7 @@ type TrackedPullRequestFeedback = {
 export type TrackedPullRequestQueue = {
   readonly openPullRequests: ReadonlyArray<OrcaManagedPullRequest>
   readonly pendingReviews: ReadonlyArray<PendingPullRequestReview>
+  readonly pullRequestsNeedingBaseSync: ReadonlyArray<OrcaManagedPullRequest>
   readonly stalePullRequests: ReadonlyArray<OrcaManagedPullRequest>
   readonly waitingForReviewPullRequests: ReadonlyArray<OrcaManagedPullRequest>
 }
@@ -50,6 +51,7 @@ export const summarizeTrackedPullRequestQueue = (
 ): TrackedPullRequestQueue => {
   const openPullRequests: Array<OrcaManagedPullRequest> = []
   const pendingReviews: Array<PendingPullRequestReview> = []
+  const pullRequestsNeedingBaseSync: Array<OrcaManagedPullRequest> = []
   const stalePullRequests: Array<OrcaManagedPullRequest> = []
   const waitingForReviewPullRequests: Array<OrcaManagedPullRequest> = []
 
@@ -60,6 +62,11 @@ export const summarizeTrackedPullRequestQueue = (
     }
 
     openPullRequests.push(trackedPullRequest.pullRequest)
+
+    if (needsBaseSync(trackedPullRequest.feedback)) {
+      pullRequestsNeedingBaseSync.push(trackedPullRequest.pullRequest)
+      continue
+    }
 
     if (!isTrackedForGreptileLoop(trackedPullRequest.pullRequest)) {
       continue
@@ -81,12 +88,18 @@ export const summarizeTrackedPullRequestQueue = (
   return {
     openPullRequests,
     pendingReviews,
+    pullRequestsNeedingBaseSync,
     stalePullRequests,
     waitingForReviewPullRequests,
   }
 }
 
 const isOpenPullRequest = (feedback: PullRequestFeedback) => feedback.state.toUpperCase() === "OPEN"
+
+const mergeStatesNeedingBaseSync = new Set(["BEHIND", "DIRTY"])
+
+const needsBaseSync = (feedback: PullRequestFeedback) =>
+  mergeStatesNeedingBaseSync.has(feedback.mergeStateStatus.toUpperCase())
 
 const isTrackedForGreptileLoop = (pullRequest: OrcaManagedPullRequest) =>
   pullRequest.greptileCompletedAtMs === null

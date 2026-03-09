@@ -1,11 +1,13 @@
 import { Data, Effect, FileSystem, Layer, Schema, ServiceMap } from "effect"
 import { resolveOrcaDirectory } from "./orca-directory.ts"
 
-export const activeRunModes = ["implementation", "review"] as const
+export const activeRunModes = ["implementation", "maintenance", "review"] as const
 export type ActiveRunMode = (typeof activeRunModes)[number]
 
 export const activeRunStages = [
   "implementing",
+  "syncing-with-base",
+  "resolving-merge-conflicts",
   "addressing-review-feedback",
   "verifying",
   "publishing-pull-request",
@@ -149,6 +151,10 @@ export const formatActiveRunStage = (stage: ActiveRunStage) => {
   switch (stage) {
     case "implementing":
       return "in implementation"
+    case "syncing-with-base":
+      return "syncing with base"
+    case "resolving-merge-conflicts":
+      return "resolving merge conflicts"
     case "addressing-review-feedback":
       return "addressing review feedback"
     case "verifying":
