@@ -129,6 +129,28 @@ describe("review queue", () => {
     expect(pending).toBeNull()
   })
 
+  it("omits old unresolved threads from feedback-triggered markdown", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [comment({ authorLogin: "reviewer", body: "Please rerun this after the rename.", createdAtMs: 60 })],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 10 })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 50 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rerun this after the rename.")
+    expect(pending?.feedbackMarkdown).not.toContain("Please rename this helper.")
+  })
+
   it("selects recent @orca mentions from general comments", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({

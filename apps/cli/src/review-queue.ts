@@ -71,7 +71,7 @@ export const findPendingPullRequestReview = (options: {
       reviews: recentReviews,
       trigger,
       triggerLabelPresent,
-      unresolvedThreads,
+      unresolvedThreads: triggerLabelPresent ? unresolvedThreads : recentUnresolvedThreads,
     }),
     latestFeedbackAtMs,
     pullRequest: options.pullRequest,
@@ -86,10 +86,10 @@ const hasMentionTrigger = (options: {
   readonly since: number
   readonly threads: ReadonlyArray<PullRequestReviewThread>
 }) =>
-  options.comments.some((comment) => !comment.isBot && comment.createdAtMs > options.since && containsOrcaMention(comment.body))
-  || options.reviews.some((review) => !review.isBot && review.createdAtMs > options.since && containsOrcaMention(review.body))
+  options.comments.some((comment) => containsOrcaMention(comment.body))
+  || options.reviews.some((review) => containsOrcaMention(review.body))
   || options.threads.some((thread) =>
-    thread.comments.some((comment) => !comment.isBot && comment.createdAtMs > options.since && containsOrcaMention(comment.body)))
+    thread.comments.some((comment) => comment.createdAtMs > options.since && containsOrcaMention(comment.body)))
 
 const containsOrcaMention = (body: string) => /(^|\W)@orca\b/i.test(body)
 
