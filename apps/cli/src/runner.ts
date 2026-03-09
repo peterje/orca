@@ -1,4 +1,4 @@
-import { Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
+import { Console, Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
 import { AgentRunner, AgentRunnerError, AgentRunnerStalledError, AgentRunnerTimeoutError } from "./agent-runner.ts"
 import { GitHub, GitHubError, type GitHubService, type PullRequestInfo } from "./github.ts"
 import { planIssues, type IssuePlan, type PlannedIssue } from "./issue-planner.ts"
@@ -7,7 +7,7 @@ import { PromptGen, PromptGenError } from "./prompt-gen.ts"
 import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
 import { findPendingPullRequestReview, type PendingPullRequestReview, reviewTriggerLabel } from "./review-queue.ts"
-import { RunState, RunStateBusyError, RunStateError } from "./run-state.ts"
+import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
 import { Worktree, WorktreeError, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
 
@@ -212,12 +212,21 @@ const runImplementation = (options: {
       branch: managedWorktree.branch,
       issueId: options.issue.id,
       issueIdentifier: options.issue.identifier,
+      issueTitle: options.issue.title,
+      mode: "implementation",
+      stage: "implementing",
       worktreePath: managedWorktree.directory,
     }).pipe(
       Effect.mapError((cause) => (cause instanceof RunStateBusyError ? cause : toRunnerFailure(cause))),
     )
 
     return yield* Effect.gen(function* () {
+      yield* announceRunStage({
+        issueIdentifier: options.issue.identifier,
+        issueTitle: options.issue.title,
+        stage: "implementing",
+      })
+
       yield* options.linear.markIssueInProgress(options.issue).pipe(Effect.mapError(toRunnerFailure))
 
       const prompt = yield* options.promptGen.buildImplementationPrompt({
@@ -240,10 +249,24 @@ const runImplementation = (options: {
         timeoutMinutes: options.config.agentTimeoutMinutes,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      yield* setRunStage(options.runState, "verifying").pipe(Effect.mapError(toRunnerFailure))
+      yield* announceRunStage({
+        issueIdentifier: options.issue.identifier,
+        issueTitle: options.issue.title,
+        stage: "verifying",
+      })
+
       yield* options.verifier.run({
         commands: options.config.verify,
         cwd: managedWorktree.directory,
       }).pipe(Effect.mapError(toRunnerFailure))
+
+      yield* setRunStage(options.runState, "publishing-pull-request").pipe(Effect.mapError(toRunnerFailure))
+      yield* announceRunStage({
+        issueIdentifier: options.issue.identifier,
+        issueTitle: options.issue.title,
+        stage: "publishing-pull-request",
+      })
 
       const finalizedPullRequest = yield* finalizeGitAndPullRequest({
         allowCreatePullRequest: true,
@@ -280,9 +303,15 @@ const runImplementation = (options: {
       yield* options.runState.update({
         prNumber: finalizedPullRequest.pullRequest.number,
         prUrl: finalizedPullRequest.pullRequest.url,
+        stage: "waiting-for-review",
       }).pipe(
         Effect.mapError(toRunnerFailure),
       )
+      yield* announceRunStage({
+        issueIdentifier: options.issue.identifier,
+        issueTitle: options.issue.title,
+        stage: "waiting-for-review",
+      })
       yield* options.linear.commentOnIssue({
         body: [`Orca opened a pull request for ${options.issue.identifier}.`, "", `- PR: ${finalizedPullRequest.pullRequest.url}`].join("\n"),
         issueId: options.issue.id,
@@ -337,12 +366,21 @@ const runReview = (options: {
       branch: managedWorktree.branch,
       issueId: options.review.pullRequest.issueId,
       issueIdentifier: options.review.pullRequest.issueIdentifier,
+      issueTitle: options.review.pullRequest.issueTitle,
+      mode: "review",
+      stage: "addressing-review-feedback",
       worktreePath: managedWorktree.directory,
     }).pipe(
       Effect.mapError((cause) => (cause instanceof RunStateBusyError ? cause : toRunnerFailure(cause))),
     )
 
     return yield* Effect.gen(function* () {
+      yield* announceRunStage({
+        issueIdentifier: options.review.pullRequest.issueIdentifier,
+        issueTitle: options.review.pullRequest.issueTitle,
+        stage: "addressing-review-feedback",
+      })
+
       const prompt = yield* options.promptGen.buildReviewPrompt({
         baseBranch: options.config.baseBranch,
         branch: managedWorktree.branch,
@@ -366,10 +404,24 @@ const runReview = (options: {
         timeoutMinutes: options.config.agentTimeoutMinutes,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      yield* setRunStage(options.runState, "verifying").pipe(Effect.mapError(toRunnerFailure))
+      yield* announceRunStage({
+        issueIdentifier: options.review.pullRequest.issueIdentifier,
+        issueTitle: options.review.pullRequest.issueTitle,
+        stage: "verifying",
+      })
+
       yield* options.verifier.run({
         commands: options.config.verify,
         cwd: managedWorktree.directory,
       }).pipe(Effect.mapError(toRunnerFailure))
+
+      yield* setRunStage(options.runState, "publishing-pull-request").pipe(Effect.mapError(toRunnerFailure))
+      yield* announceRunStage({
+        issueIdentifier: options.review.pullRequest.issueIdentifier,
+        issueTitle: options.review.pullRequest.issueTitle,
+        stage: "publishing-pull-request",
+      })
 
       const finalizedPullRequest = yield* finalizeGitAndPullRequest({
         allowCreatePullRequest: false,
@@ -398,9 +450,15 @@ const runReview = (options: {
       yield* options.runState.update({
         prNumber: finalizedPullRequest.pullRequest.number,
         prUrl: finalizedPullRequest.pullRequest.url,
+        stage: "waiting-for-review",
       }).pipe(
         Effect.mapError(toRunnerFailure),
       )
+      yield* announceRunStage({
+        issueIdentifier: options.review.pullRequest.issueIdentifier,
+        issueTitle: options.review.pullRequest.issueTitle,
+        stage: "waiting-for-review",
+      })
       yield* options.linear.commentOnIssue({
         body: [`Orca updated the pull request for ${options.review.pullRequest.issueIdentifier}.`, "", `- PR: ${finalizedPullRequest.pullRequest.url}`].join("\n"),
         issueId: options.review.pullRequest.issueId,
@@ -435,6 +493,21 @@ const writePromptFile = (fs: FileSystem.FileSystem, worktreeDirectory: string, c
     yield* fs.makeDirectory(promptDirectory, { recursive: true }).pipe(Effect.mapError(toRunnerFailure))
     yield* fs.writeFileString(`${promptDirectory}/issue.md`, contents).pipe(Effect.mapError(toRunnerFailure))
   })
+
+const setRunStage = (runState: typeof RunState.Service, stage: ActiveRunStage) =>
+  runState.update({ stage }).pipe(
+    Effect.flatMap((run) =>
+      run === null
+        ? Effect.fail(new RunnerFailure({ message: "Active run state disappeared while Orca was working." }))
+        : Effect.succeed(run)),
+  )
+
+const announceRunStage = (options: {
+  readonly issueIdentifier: string
+  readonly issueTitle: string
+  readonly stage: ActiveRunStage
+}) =>
+  Console.log(`Mission control: ${formatIssueLabel(options.issueIdentifier, options.issueTitle)} - ${formatActiveRunStage(options.stage)}`)
 
 const finalizeGitAndPullRequest = (options: {
   readonly allowCreatePullRequest: boolean
@@ -575,6 +648,9 @@ const comparePendingReviews = (left: PendingPullRequestReview, right: PendingPul
 
 const countWaitingPullRequests = (pullRequests: ReadonlyArray<OrcaManagedPullRequest>) =>
   pullRequests.filter((pullRequest) => pullRequest.waitingForGreptileReviewSinceMs !== null).length
+
+const formatIssueLabel = (issueIdentifier: string, issueTitle: string) =>
+  issueTitle.trim().length > 0 ? `${issueIdentifier} ${issueTitle}` : issueIdentifier
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `"'"'`)}'`
 

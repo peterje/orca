@@ -273,6 +273,7 @@ const makeRunnerLayer = (options: {
   const requestedReviews = options.requestedReviews ?? []
   const storedPullRequests = options.storedPullRequests ?? []
   const trackedPullRequests = options.trackedPullRequests ?? []
+  let activeRun: ActiveRun | null = null
 
   return RunnerLayer.pipe(
     Layer.provide(
@@ -391,16 +392,31 @@ const makeRunnerLayer = (options: {
         Layer.succeed(
           RunState,
           RunState.of({
-            acquire: options.runStateAcquire ?? ((run) => Effect.succeed({
-              ...run,
-              pid: process.pid,
-              prNumber: null,
-              prUrl: null,
-              startedAtMs: 1,
-            } as ActiveRun)),
+            acquire: options.runStateAcquire ?? ((run) => Effect.sync(() => {
+              activeRun = {
+                ...run,
+                pid: process.pid,
+                prNumber: null,
+                prUrl: null,
+                startedAtMs: 1,
+              } as ActiveRun
+              return activeRun
+            })),
             clear: Effect.void,
-            current: Effect.die("not used in this test"),
-            update: () => Effect.succeed(null),
+            current: Effect.sync(() => activeRun),
+            update: (patch) =>
+              Effect.sync(() => {
+                if (activeRun === null) {
+                  return null
+                }
+                activeRun = {
+                  ...activeRun,
+                  prNumber: patch.prNumber ?? activeRun.prNumber,
+                  prUrl: patch.prUrl ?? activeRun.prUrl,
+                  stage: patch.stage ?? activeRun.stage,
+                } as ActiveRun
+                return activeRun
+              }),
           }),
         ),
         Layer.succeed(
