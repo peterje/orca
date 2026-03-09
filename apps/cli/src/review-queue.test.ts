@@ -28,16 +28,35 @@ describe("review queue", () => {
       feedback: feedback({
         reviewThreads: [
           {
-            comments: [reviewComment({ body: "Please rename this helper.", createdAtMs: 10 })],
+            comments: [reviewComment({ authorLogin: "author", body: "Please rename this helper.", createdAtMs: 10 })],
             isCollapsed: false,
             isResolved: false,
           },
         ],
+        authorLogin: "author",
       }),
       pullRequest: pullRequest({ lastReviewedAtMs: null }),
     })
 
     expect(pending).toBeNull()
+  })
+
+  it("selects recent reviewer feedback without a manual trigger", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [
+          comment({ authorLogin: "author", body: "@greptileai", createdAtMs: 20 }),
+          comment({ authorLogin: "greptile-apps", body: "Please avoid failing the run for a missing issue URL.", createdAtMs: 50 }),
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please avoid failing the run for a missing issue URL.")
+    expect(pending?.feedbackMarkdown).not.toContain("@greptileai")
   })
 
   it("selects recent @orca mentions from general comments", () => {
@@ -71,6 +90,7 @@ const pullRequest = (overrides?: Partial<{
 })
 
 const feedback = (overrides?: Partial<PullRequestFeedback>): PullRequestFeedback => ({
+  authorLogin: overrides?.authorLogin ?? "author",
   comments: overrides?.comments ?? [],
   isDraft: true,
   labels: overrides?.labels ?? [],

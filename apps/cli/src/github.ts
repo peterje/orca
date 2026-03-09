@@ -37,6 +37,7 @@ export type PullRequestReviewThread = {
 }
 
 export type PullRequestFeedback = PullRequestInfo & {
+  readonly authorLogin: string
   readonly comments: ReadonlyArray<PullRequestComment>
   readonly labels: ReadonlyArray<string>
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>
@@ -257,6 +258,7 @@ const parsePullRequestFeedback = (raw: string): PullRequestFeedback => {
     readonly data?: {
       readonly repository?: {
         readonly pullRequest?: {
+          readonly author?: { readonly login?: string } | null
           readonly comments?: { readonly nodes?: ReadonlyArray<PullRequestNodeCommentJson> }
           readonly isDraft?: boolean
           readonly labels?: { readonly nodes?: ReadonlyArray<{ readonly name?: string }> }
@@ -276,6 +278,7 @@ const parsePullRequestFeedback = (raw: string): PullRequestFeedback => {
   }
 
   return {
+    authorLogin: normalizeAuthorLogin(pullRequest.author?.login),
     comments: (pullRequest.comments?.nodes ?? []).map(mapComment),
     isDraft: pullRequest.isDraft === true,
     labels: (pullRequest.labels?.nodes ?? [])
@@ -365,6 +368,9 @@ const pullRequestFeedbackQuery = `
 query PullRequestFeedback($owner: String!, $repo: String!, $pr: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
+      author {
+        login
+      }
       number
       url
       state
