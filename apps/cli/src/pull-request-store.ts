@@ -4,6 +4,7 @@ import { resolveOrcaDirectory } from "./orca-directory.ts"
 export class OrcaManagedPullRequest extends Schema.Class<OrcaManagedPullRequest>("orca/OrcaManagedPullRequest")({
   branch: Schema.String,
   createdAtMs: Schema.Number,
+  greptileCompletedAtMs: Schema.NullOr(Schema.Number),
   issueDescription: Schema.String,
   issueId: Schema.String,
   issueIdentifier: Schema.String,
@@ -20,6 +21,12 @@ const StoredPullRequests = Schema.Array(OrcaManagedPullRequest)
 
 export type PullRequestStoreService = {
   readonly list: Effect.Effect<ReadonlyArray<OrcaManagedPullRequest>, PullRequestStoreError>
+  readonly markGreptileCompleted: (options: {
+    readonly completedAtMs: number
+    readonly lastReviewedAtMs: number
+    readonly prNumber: number
+    readonly repo: string
+  }) => Effect.Effect<OrcaManagedPullRequest | null, PullRequestStoreError>
   readonly markReviewHandled: (options: {
     readonly lastReviewedAtMs: number
     readonly prNumber: number
@@ -34,6 +41,7 @@ export type PullRequestStoreService = {
     readonly prNumber: number
     readonly prUrl: string
     readonly repo: string
+    readonly greptileCompletedAtMs?: number | null | undefined
     readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }) => Effect.Effect<OrcaManagedPullRequest, PullRequestStoreError>
 }
@@ -90,6 +98,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
     readonly prNumber: number
     readonly prUrl: string
     readonly repo: string
+    readonly greptileCompletedAtMs?: number | null | undefined
     readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }) =>
     Effect.gen(function* () {
@@ -99,6 +108,10 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       const next = new OrcaManagedPullRequest({
         branch: record.branch,
         createdAtMs: existing?.createdAtMs ?? now,
+        greptileCompletedAtMs:
+          record.greptileCompletedAtMs === undefined
+            ? existing?.greptileCompletedAtMs ?? null
+            : record.greptileCompletedAtMs,
         issueDescription: record.issueDescription,
         issueId: record.issueId,
         issueIdentifier: record.issueIdentifier,
@@ -119,6 +132,36 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       ].sort(comparePullRequests)
       yield* write(nextRecords)
       return next
+    })
+
+  const markGreptileCompleted = (options: {
+    readonly completedAtMs: number
+    readonly lastReviewedAtMs: number
+    readonly prNumber: number
+    readonly repo: string
+  }) =>
+    Effect.gen(function* () {
+      const records = yield* list
+      let updated: OrcaManagedPullRequest | null = null
+      const nextRecords = records.map((record) => {
+        if (!(record.repo === options.repo && record.prNumber === options.prNumber)) {
+          return record
+        }
+
+        updated = new OrcaManagedPullRequest({
+          ...record,
+          greptileCompletedAtMs: options.completedAtMs,
+          lastReviewedAtMs: options.lastReviewedAtMs,
+          updatedAtMs: options.completedAtMs,
+          waitingForGreptileReviewSinceMs: null,
+        })
+        return updated
+      })
+      if (updated === null) {
+        return null
+      }
+      yield* write(nextRecords)
+      return updated
     })
 
   const markReviewHandled = (options: {
@@ -150,7 +193,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return updated
     })
 
-  return PullRequestStore.of({ list, markReviewHandled, upsert })
+  return PullRequestStore.of({ list, markGreptileCompleted, markReviewHandled, upsert })
 })
 
 export const PullRequestStoreLayer = Layer.effect(PullRequestStore, PullRequestStoreLive)
@@ -168,6 +211,7 @@ const normalizeStoredPullRequests = (json: unknown) =>
 const normalizeStoredPullRequest = (record: unknown) =>
   typeof record === "object" && record !== null
     ? {
+        greptileCompletedAtMs: null,
         waitingForGreptileReviewSinceMs: null,
         ...record,
       }

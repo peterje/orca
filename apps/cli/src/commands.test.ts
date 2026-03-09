@@ -363,6 +363,7 @@ const sequencingRunnerLayer = (
 
       return Runner.of({
         peekNext: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? Option.none(), current + 1]),
+        pollWaitingPullRequests: Effect.void,
         runNext: Effect.die("not used in this test"),
       })
     }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import type { PullRequestFeedback } from "./github.ts"
-import { findPendingPullRequestReview } from "./review-queue.ts"
+import { findLatestGreptileReviewScore, findPendingPullRequestReview, hasLatestGreptileReviewScore } from "./review-queue.ts"
 
 describe("review queue", () => {
   it("selects label-triggered unresolved review threads", () => {
@@ -163,13 +163,57 @@ describe("review queue", () => {
     expect(pending?.trigger).toBe("mention")
     expect(pending?.feedbackMarkdown).toContain("@orca can you address this?")
   })
+
+  it("parses the score from the latest Greptile review only", () => {
+    const latestScore = findLatestGreptileReviewScore(feedback({
+      reviews: [
+        review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 10, id: "review-1" }),
+        review({ authorLogin: "reviewer", body: "human review", createdAtMs: 15, id: "review-2" }),
+        review({ authorLogin: "greptile-apps-staging[bot]", body: "Confidence: 5/5", createdAtMs: 20, id: "review-3" }),
+      ],
+    }))
+
+    expect(latestScore).toMatchObject({
+      achieved: 5,
+      total: 5,
+    })
+    expect(hasLatestGreptileReviewScore(feedback({
+      reviews: [
+        review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 10, id: "review-1" }),
+        review({ authorLogin: "greptile-apps-staging[bot]", body: "Confidence: 5/5", createdAtMs: 20, id: "review-3" }),
+      ],
+    }), 5, 5)).toBe(true)
+  })
+
+  it("does not let older unresolved Greptile comments block a latest 5/5 review", () => {
+    const latestScore = findLatestGreptileReviewScore(feedback({
+      reviewThreads: [
+        {
+          comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 10 })],
+          isCollapsed: false,
+          isResolved: false,
+        },
+      ],
+      reviews: [
+        review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 2/5", createdAtMs: 20, id: "review-1" }),
+        review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 30, id: "review-2" }),
+      ],
+    }))
+
+    expect(latestScore).toMatchObject({
+      achieved: 5,
+      total: 5,
+    })
+  })
 })
 
 const pullRequest = (overrides?: Partial<{
+  readonly greptileCompletedAtMs: number | null
   readonly lastReviewedAtMs: number | null
 }>) => ({
   branch: "orca/eng-1",
   createdAtMs: 1,
+  greptileCompletedAtMs: overrides?.greptileCompletedAtMs ?? null,
   issueDescription: "",
   issueId: "issue-1",
   issueIdentifier: "ENG-1",

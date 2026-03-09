@@ -18,6 +18,12 @@ export type PendingPullRequestReview = {
   readonly triggerLabelPresent: boolean
 }
 
+export type GreptileReviewScore = {
+  readonly achieved: number
+  readonly review: PullRequestReview
+  readonly total: number
+}
+
 export const findPendingPullRequestReview = (options: {
   readonly feedback: PullRequestFeedback
   readonly pullRequest: OrcaManagedPullRequest
@@ -78,6 +84,39 @@ export const findPendingPullRequestReview = (options: {
     trigger,
     triggerLabelPresent,
   }
+}
+
+export const findLatestGreptileReviewScore = (feedback: PullRequestFeedback): GreptileReviewScore | null => {
+  const latestReview = feedback.reviews.reduce<PullRequestReview | null>((latest, review) => {
+    if (!isGreptileReview(review)) {
+      return latest
+    }
+
+    if (latest === null || review.createdAtMs > latest.createdAtMs) {
+      return review
+    }
+
+    return latest
+  }, null)
+
+  if (latestReview === null) {
+    return null
+  }
+
+  const score = parseGreptileScore(latestReview.body)
+  if (score === null) {
+    return null
+  }
+
+  return {
+    ...score,
+    review: latestReview,
+  }
+}
+
+export const hasLatestGreptileReviewScore = (feedback: PullRequestFeedback, achieved: number, total: number) => {
+  const score = findLatestGreptileReviewScore(feedback)
+  return score !== null && score.achieved === achieved && score.total === total
 }
 
 const hasMentionTrigger = (options: {
@@ -187,3 +226,23 @@ const renderReview = (review: PullRequestReview) => `<review author="${review.au
 const renderGeneralComment = (comment: PullRequestComment) => `  <comment author="${comment.authorLogin}">
     <body>${comment.body}</body>
   </comment>`
+
+const greptileReviewAuthorPrefixes = ["greptile-apps", "greptile-apps-staging"]
+
+const isGreptileReview = (review: PullRequestReview) =>
+  greptileReviewAuthorPrefixes.some((prefix) => review.authorLogin.toLowerCase().startsWith(prefix))
+
+const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "review"> | null => {
+  const match = body.match(/(^|[^\d])(\d+)\s*\/\s*(\d+)(?!\d)/)
+  if (match === null) {
+    return null
+  }
+
+  const achieved = Number(match[2])
+  const total = Number(match[3])
+  if (!Number.isFinite(achieved) || !Number.isFinite(total)) {
+    return null
+  }
+
+  return { achieved, total }
+}
