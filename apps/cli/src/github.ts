@@ -1,5 +1,6 @@
 import { Data, Effect, Layer, Option, ServiceMap } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { makeShellCommand } from "./shared/shell.ts"
 
 export type PullRequestInfo = {
   readonly isDraft: boolean
@@ -128,28 +129,28 @@ export const GitHubLive = Effect.gen(function* () {
     readonly draft: boolean
     readonly repo: string
     readonly title: string
-  }) =>
-    ChildProcess.make(
-      "gh",
-      [
-        "pr",
-        "create",
-        ...(options.draft ? ["--draft"] : []),
-        "--repo",
-        options.repo,
-        "--base",
-        options.baseBranch,
-        "--title",
-        options.title,
-        "--body",
-        options.body,
-      ],
-      {
-        cwd: options.cwd,
-        stderr: "pipe",
-        stdout: "pipe",
+  }) => {
+    const bodyDelimiter = makeHereDocDelimiter(options.body)
+    const command = [
+      "gh pr create",
+      ...(options.draft ? ["--draft"] : []),
+      "--repo \"$ORCA_PR_REPO\"",
+      "--base \"$ORCA_PR_BASE_BRANCH\"",
+      "--title \"$ORCA_PR_TITLE\"",
+      `--body "$(cat <<'${bodyDelimiter}'\n${options.body}\n${bodyDelimiter}\n)"`,
+    ].join(" ")
+
+    return makeShellCommand({
+      command,
+      cwd: options.cwd,
+      env: {
+        ORCA_PR_BASE_BRANCH: options.baseBranch,
+        ORCA_PR_REPO: options.repo,
+        ORCA_PR_TITLE: options.title,
       },
-    ).pipe(
+      stderr: "pipe",
+      stdout: "pipe",
+    }).pipe(
       spawner.string,
       Effect.map((value) => value.trim()),
       Effect.flatMap(() => viewCurrentPullRequest(options.cwd)),
@@ -168,6 +169,7 @@ export const GitHubLive = Effect.gen(function* () {
           : new GitHubError({ message: "Failed to create a github pull request.", cause }),
       ),
     )
+  }
 
   const requestPullRequestReview = (options: {
     readonly pullRequestNumber: number
@@ -289,6 +291,18 @@ export class GitHubError extends Data.TaggedError("GitHubError")<{
   readonly message: string
   readonly cause?: unknown
 }> {}
+
+const makeHereDocDelimiter = (body: string) => {
+  let delimiter = "ORCA_PR_BODY"
+  let suffix = 0
+
+  while (body.includes(delimiter)) {
+    suffix += 1
+    delimiter = `ORCA_PR_BODY_${suffix}`
+  }
+
+  return delimiter
+}
 
 const commonBotUserPrefixes = ["dependabot", "github", "changeset", "renovate", "snyk", "coderabbit"]
 

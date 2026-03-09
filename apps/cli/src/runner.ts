@@ -494,11 +494,11 @@ const finalizeGitAndPullRequest = (options: {
 
     const pullRequest = yield* options.github.createPullRequest({
       baseBranch: options.config.baseBranch,
-      body: makePullRequestBody(options.issueIdentifier, options.config.verify),
+      body: makePullRequestBody(options.issueIdentifier, options.issueTitle, options.config.verify),
       cwd: options.worktree.directory,
       draft: options.config.draftPr,
       repo: options.config.repo,
-      title: `${options.issueIdentifier}: ${options.issueTitle}`,
+      title: makePullRequestTitle(options.issueTitle),
     }).pipe(Effect.mapError(toRunnerFailure))
 
     return {
@@ -550,17 +550,23 @@ const makeImplementationCommitMessage = (issue: PlannedIssue) =>
 const makeReviewCommitMessage = (pullRequest: OrcaManagedPullRequest) =>
   `fix: address ${pullRequest.issueIdentifier.toLowerCase()} review feedback`
 
-const makePullRequestBody = (issueIdentifier: string, verify: ReadonlyArray<string>) =>
+const makePullRequestTitle = (issueTitle: string) =>
+  `feat: ${issueTitle.trim().toLowerCase()}`
+
+const makePullRequestBody = (issueIdentifier: string, issueTitle: string, verify: ReadonlyArray<string>) =>
   [
-    "## Summary",
-    `- Implement ${issueIdentifier} automatically with Orca.`,
+    `this pr brings ${issueTitle.trim().toLowerCase()} into the repo so the requested behavior is ready for review.`,
     "",
-    "## Verification",
+    "### changes",
+    `#### 1. deliver ${issueTitle.trim().toLowerCase()}`,
+    "this keeps the branch focused on the requested outcome and ready for the usual review flow.",
+    "",
+    "### verification",
     ...(verify.length > 0
       ? verify.map((command) => `- \`${command}\``)
-      : ["- No verification commands were configured."]),
+      : ["- no verification commands were configured."]),
     "",
-    `Refs ${issueIdentifier}`,
+    `closes ${issueIdentifier}`,
   ].join("\n")
 
 const comparePendingReviews = (left: PendingPullRequestReview, right: PendingPullRequestReview) =>

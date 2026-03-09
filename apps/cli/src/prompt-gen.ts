@@ -79,8 +79,9 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 
 - Have the branch ready for review.
 - If you commit, use a conventional commit message.
-- If you open a PR, use the title \`${options.issue.identifier}: ${options.issue.title}\`.
-- Include a brief summary, the verification commands you ran, and \`Refs ${options.issue.identifier}\` in the PR body.
+- If you open a PR, use a lowercase conventional commit title.
+- Create the PR with \`gh pr create\` and a HEREDOC body so the formatting is preserved.
+- Write the PR body in lowercase narrative prose, use only \`###\` and \`####\` headings, include the verification commands you ran under \`### verification\`, and end with \`closes ${options.issue.identifier}\`.
 `
 
       return { prompt, promptFileContents }

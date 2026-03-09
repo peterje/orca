@@ -33,6 +33,50 @@ describe("GitHub", () => {
       ),
     ))
 
+  it.effect("creates pull requests with a heredoc body", () => {
+    const commands: Array<CommandInvocation> = []
+
+    return Effect.gen(function* () {
+      const github = yield* GitHub
+
+      const pullRequest = yield* github.createPullRequest({
+        baseBranch: "main",
+        body: "intro\n\n### verification\n- `bun run test`\n\ncloses PET-20",
+        cwd: process.cwd(),
+        draft: true,
+        repo: "peterje/orca",
+        title: "feat: improve pr styling",
+      })
+
+      expect(pullRequest).toMatchObject({
+        number: 42,
+        url: "https://github.com/peterje/orca/pull/42",
+      })
+      const createCommand = commands.find((command) => command.command === "/bin/bash")
+
+      expect(createCommand).toMatchObject({
+        args: [
+          "-lc",
+          expect.stringContaining("gh pr create --draft --repo \"$ORCA_PR_REPO\" --base \"$ORCA_PR_BASE_BRANCH\" --title \"$ORCA_PR_TITLE\" --body \"$(cat <<'ORCA_PR_BODY'"),
+        ],
+        command: "/bin/bash",
+      })
+      expect(createCommand?.args[1]).toContain("closes PET-20")
+    }).pipe(
+      Effect.provide(
+        makeGitHubLayer({
+          onCommand: (command) => {
+            commands.push(command)
+          },
+          stdout: (command) =>
+            command.command === "gh"
+              ? '{"number":42,"url":"https://github.com/peterje/orca/pull/42","state":"OPEN","isDraft":true}'
+              : "",
+        }),
+      ),
+    )
+  })
+
   it.effect("reads pull request review feedback", () =>
     Effect.gen(function* () {
       const github = yield* GitHub

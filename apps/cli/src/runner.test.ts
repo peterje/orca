@@ -29,6 +29,14 @@ const testFileSystemLayer = Layer.succeed(FileSystem.FileSystem, {
 
 describe("Runner", () => {
   it.effect("requests Greptile review and records the waiting state for new pull requests", () => {
+    const createdPullRequests: Array<{
+      readonly baseBranch: string
+      readonly body: string
+      readonly cwd: string
+      readonly draft: boolean
+      readonly repo: string
+      readonly title: string
+    }> = []
     const requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
     const storedPullRequests: Array<{
       readonly branch: string
@@ -55,6 +63,27 @@ describe("Runner", () => {
           mode: "implementation",
           pullRequestUrl: "https://github.com/peterje/orca/pull/42",
         })
+        expect(createdPullRequests).toEqual([
+          {
+            baseBranch: "main",
+            body: [
+              "this pr brings example issue into the repo so the requested behavior is ready for review.",
+              "",
+              "### changes",
+              "#### 1. deliver example issue",
+              "this keeps the branch focused on the requested outcome and ready for the usual review flow.",
+              "",
+              "### verification",
+              "- `bun run check`",
+              "",
+              "closes ENG-1",
+            ].join("\n"),
+            cwd: worktreeDirectory,
+            draft: true,
+            repo: "peterje/orca",
+            title: "feat: example issue",
+          },
+        ])
         expect(requestedReviews).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
         expect(storedPullRequests).toHaveLength(1)
         expect(storedPullRequests[0]).toMatchObject({
@@ -64,7 +93,7 @@ describe("Runner", () => {
         })
         expect(typeof storedPullRequests[0]?.waitingForGreptileReviewSinceMs).toBe("number")
         expect(readFileSync(join(worktreeDirectory, ".orca/issue.md"), "utf8")).toContain("Identifier: ENG-1")
-      }).pipe(Effect.provide(makeRunnerLayer({ requestedReviews, storedPullRequests, worktreeDirectory })))
+      }).pipe(Effect.provide(makeRunnerLayer({ createdPullRequests, requestedReviews, storedPullRequests, worktreeDirectory })))
     })
   })
 
@@ -211,6 +240,14 @@ describe("Runner", () => {
 })
 
 const makeRunnerLayer = (options: {
+  readonly createdPullRequests?: Array<{
+    readonly baseBranch: string
+    readonly body: string
+    readonly cwd: string
+    readonly draft: boolean
+    readonly repo: string
+    readonly title: string
+  }>
   readonly issues?: ReadonlyArray<LinearIssue>
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
   readonly requestedReviews?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
@@ -232,6 +269,7 @@ const makeRunnerLayer = (options: {
   readonly worktreeDirectory: string
 }) => {
   const worktree = makeManagedWorktree(options.worktreeDirectory)
+  const createdPullRequests = options.createdPullRequests ?? []
   const requestedReviews = options.requestedReviews ?? []
   const storedPullRequests = options.storedPullRequests ?? []
   const trackedPullRequests = options.trackedPullRequests ?? []
@@ -249,12 +287,16 @@ const makeRunnerLayer = (options: {
         Layer.succeed(
           GitHub,
           GitHub.of({
-            createPullRequest: () => Effect.succeed({
-              isDraft: true,
-              number: 42,
-              state: "OPEN",
-              url: "https://github.com/peterje/orca/pull/42",
-            }),
+            createPullRequest: (request) =>
+              Effect.sync(() => {
+                createdPullRequests.push(request)
+                return {
+                  isDraft: true,
+                  number: 42,
+                  state: "OPEN",
+                  url: "https://github.com/peterje/orca/pull/42",
+                }
+              }),
             detectRepo: Effect.die("not used in this test"),
             readPullRequestFeedback: (request) =>
               Effect.succeed(
