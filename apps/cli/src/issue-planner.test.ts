@@ -204,6 +204,31 @@ describe("planIssues", () => {
       expect(plan.actionable.map((issue) => issue.identifier)).toEqual(["ENG-52"])
       expect(plan.blocked.map((issue) => issue.identifier)).toEqual(["ENG-50", "ENG-51"])
     }))
+
+  it.effect("handles cycles in blocker chains without recursing forever", () =>
+    Effect.sync(() => {
+      const plan = planIssues([
+        issue({
+          blockedBy: ["issue-2"],
+          id: "issue-1",
+          identifier: "ENG-70",
+          isOrcaTagged: true,
+          priority: 1,
+          title: "Primary issue",
+        }),
+        issue({
+          blockedBy: ["issue-1"],
+          id: "issue-2",
+          identifier: "ENG-71",
+          title: "Cyclic blocker",
+        }),
+      ])
+
+      expect(plan.actionable).toEqual([])
+      expect(plan.blocked.map((issue) => issue.identifier)).toEqual(["ENG-70", "ENG-71"])
+      expect(plan.blocked[0]?.blockingIssues.map((issue) => issue.identifier)).toEqual(["ENG-71"])
+      expect(plan.blocked[1]?.blockingIssues.map((issue) => issue.identifier)).toEqual(["ENG-70"])
+    }))
 })
 
 const issue = (
