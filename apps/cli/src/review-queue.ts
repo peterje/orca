@@ -228,18 +228,19 @@ const renderGeneralComment = (comment: PullRequestComment) => `  <comment author
   </comment>`
 
 const greptileReviewAuthorPrefixes = ["greptile-apps", "greptile-apps-staging"]
+const greptileConfidenceScorePattern = /\bconfidence\b[^\d]*(\d+)\s*\/\s*(\d+)/i
 
 const isGreptileReview = (review: PullRequestReview) =>
   greptileReviewAuthorPrefixes.some((prefix) => review.authorLogin.toLowerCase().startsWith(prefix))
 
 const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "review"> | null => {
-  const match = body.match(/(^|[^\d])(\d+)\s*\/\s*(\d+)(?!\d)/)
+  const match = body.match(greptileConfidenceScorePattern)
   if (match === null) {
     return null
   }
 
-  const achieved = Number(match[2])
-  const total = Number(match[3])
+  const achieved = Number(match[1])
+  const total = Number(match[2])
   if (!Number.isFinite(achieved) || !Number.isFinite(total)) {
     return null
   }

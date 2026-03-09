@@ -67,6 +67,11 @@ type FinalizedPullRequest = {
   readonly wasCreated: boolean
 }
 
+type WaitingForGreptileReviewPullRequest = OrcaManagedPullRequest & {
+  readonly greptileCompletedAtMs: null
+  readonly waitingForGreptileReviewSinceMs: number
+}
+
 export const RunnerLive = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const agentRunner = yield* AgentRunner
@@ -127,10 +132,6 @@ export const RunnerLive = Effect.gen(function* () {
       (pullRequest) =>
         Effect.gen(function* () {
           const waitingSince = pullRequest.waitingForGreptileReviewSinceMs
-          if (waitingSince === null) {
-            return
-          }
-
           const feedback = yield* github.readPullRequestFeedback({
             pullRequestNumber: pullRequest.prNumber,
             repo: pullRequest.repo,
@@ -190,8 +191,6 @@ export const RunnerLive = Effect.gen(function* () {
   )
 
   const runNext = Effect.gen(function* () {
-    yield* pollWaitingPullRequests
-
     const selected = yield* selectNextWork
     if (Option.isNone(selected)) {
       return yield* Effect.fail(
@@ -710,7 +709,9 @@ const countWaitingPullRequests = (pullRequests: ReadonlyArray<OrcaManagedPullReq
 const isTrackedForGreptileLoop = (pullRequest: OrcaManagedPullRequest) =>
   pullRequest.greptileCompletedAtMs === null
 
-const isWaitingForGreptileReview = (pullRequest: OrcaManagedPullRequest) =>
+const isWaitingForGreptileReview = (
+  pullRequest: OrcaManagedPullRequest,
+): pullRequest is WaitingForGreptileReviewPullRequest =>
   pullRequest.greptileCompletedAtMs === null && pullRequest.waitingForGreptileReviewSinceMs !== null
 
 const formatIssueLabel = (issueIdentifier: string, issueTitle: string) =>

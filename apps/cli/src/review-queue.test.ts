@@ -205,6 +205,29 @@ describe("review queue", () => {
       total: 5,
     })
   })
+
+  it("parses the labeled confidence score instead of earlier fractions", () => {
+    const latestScore = findLatestGreptileReviewScore(feedback({
+      reviews: [
+        review({
+          authorLogin: "greptile-apps[bot]",
+          body: [
+            "Resolved 3/4 open threads.",
+            "Only 2/5 files still need attention.",
+            "Confidence Score: 5/5",
+          ].join("\n"),
+          createdAtMs: 30,
+          id: "review-4",
+          isBot: true,
+        }),
+      ],
+    }))
+
+    expect(latestScore).toMatchObject({
+      achieved: 5,
+      total: 5,
+    })
+  })
 })
 
 const pullRequest = (overrides?: Partial<{

@@ -276,6 +276,52 @@ describe("Runner", () => {
     )
   })
 
+  it.effect("reads waiting pull request feedback once during runNext selection", () => {
+    const readPullRequestFeedbackRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) => {
+      const worktreeDirectory = join(tempDirectory, "worktree")
+      mkdirSync(worktreeDirectory, { recursive: true })
+
+      return Effect.gen(function* () {
+        const runner = yield* Runner
+
+        const result = yield* runner.runNext
+
+        expect(result).toMatchObject({
+          issueIdentifier: "ENG-2",
+          mode: "implementation",
+          pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+        })
+        expect(readPullRequestFeedbackRequests).toEqual([{ pullRequestNumber: 41, repo: "peterje/orca" }])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [
+          issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Existing work" }),
+          issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "Next work" }),
+        ],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#41": pullRequestFeedback({
+            isDraft: true,
+            number: 41,
+            url: "https://github.com/peterje/orca/pull/41",
+          }),
+        },
+        readPullRequestFeedbackRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 41,
+            prUrl: "https://github.com/peterje/orca/pull/41",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory,
+      })))
+    })
+  })
+
   it.effect("prioritizes actionable review work ahead of new implementation work", () =>
     withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -351,6 +397,7 @@ const makeRunnerLayer = (options: {
     }>
     readonly issues?: ReadonlyArray<LinearIssue>
     readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
+    readonly readPullRequestFeedbackRequests?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
     readonly readyForReviewRequests?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
     readonly requestedReviews?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
     readonly runStateAcquire?: (
@@ -374,6 +421,7 @@ const makeRunnerLayer = (options: {
   const worktree = makeManagedWorktree(options.worktreeDirectory)
   const createdPullRequests = options.createdPullRequests ?? []
   const greptileCompletedPullRequests = options.greptileCompletedPullRequests ?? []
+  const readPullRequestFeedbackRequests = options.readPullRequestFeedbackRequests ?? []
   const readyForReviewRequests = options.readyForReviewRequests ?? []
   const requestedReviews = options.requestedReviews ?? []
   const storedPullRequests = options.storedPullRequests ?? []
@@ -409,13 +457,14 @@ const makeRunnerLayer = (options: {
                 readyForReviewRequests.push(request)
               }),
             readPullRequestFeedback: (request) =>
-              Effect.succeed(
-                options.pullRequestFeedbackByKey?.[makePullRequestKey(request)]
-                ?? pullRequestFeedback({
-                  number: request.pullRequestNumber,
-                  url: `https://github.com/${request.repo}/pull/${request.pullRequestNumber}`,
-                }),
-              ),
+              Effect.sync(() => {
+                readPullRequestFeedbackRequests.push(request)
+                return options.pullRequestFeedbackByKey?.[makePullRequestKey(request)]
+                  ?? pullRequestFeedback({
+                    number: request.pullRequestNumber,
+                    url: `https://github.com/${request.repo}/pull/${request.pullRequestNumber}`,
+                  })
+              }),
             removePullRequestLabel: () => Effect.die("not used in this test"),
             requestPullRequestReview: (request) =>
               Effect.sync(() => {
