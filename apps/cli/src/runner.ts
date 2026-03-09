@@ -10,7 +10,7 @@ import { findLatestGreptileReviewScore, type PendingPullRequestReview } from "./
 import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
 import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
-import { Worktree, WorktreeError, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
+import { Worktree, WorktreeError, makeRemoteBaseRef, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
 
 export type RunnerResult = {
   readonly issueIdentifier: string
@@ -865,7 +865,7 @@ const finalizeGitAndPullRequest = (options: {
   Effect.gen(function* () {
     const status = (yield* options.worktree.runString("git status --porcelain --untracked-files=all").pipe(Effect.mapError(toRunnerFailure))).trim()
     const aheadCount = Number(
-      (yield* options.worktree.runString(`git rev-list --count ${shellQuote(options.config.baseBranch)}..HEAD`).pipe(Effect.mapError(toRunnerFailure))).trim() || "0",
+      (yield* options.worktree.runString(`git rev-list --count ${shellQuote(makeRemoteBaseRef(options.config.baseBranch))}..HEAD`).pipe(Effect.mapError(toRunnerFailure))).trim() || "0",
     )
 
     if (status.length > 0) {

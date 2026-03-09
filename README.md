@@ -89,7 +89,7 @@ Or continuously execute the top actionable issue:
 bun run orca serve --execute
 ```
 
-In execution mode, Orca creates a git worktree under `./.orca/worktrees/`, runs the configured verification commands, pushes a branch, and opens a draft pull request. When an existing tracked pull request drifts behind the base branch, Orca resumes that worktree, attempts a weave-backed sync first, and only falls back to the agent if merge conflicts still remain.
+In execution mode, Orca fetches the latest `origin/<base-branch>`, creates a git worktree under `./.orca/worktrees/` from that remote base to reduce avoidable merge conflicts, runs the configured verification commands, pushes a branch, and opens a draft pull request.
 
 ## Command guide
 
