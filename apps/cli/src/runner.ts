@@ -6,7 +6,7 @@ import { Linear, type LinearService } from "./linear.ts"
 import { PromptGen, PromptGenError } from "./prompt-gen.ts"
 import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
-import { findPendingPullRequestReview, type PendingPullRequestReview, reviewTriggerLabel } from "./review-queue.ts"
+import { findPendingPullRequestReview, type PendingPullRequestReview } from "./review-queue.ts"
 import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
 import { Worktree, WorktreeError, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
@@ -433,19 +433,19 @@ const runReview = (options: {
         worktree: managedWorktree,
       }).pipe(Effect.mapError(toRunnerFailure))
 
-      yield* options.pullRequestStore.markReviewHandled({
-        lastReviewedAtMs: Date.now(),
-        prNumber: options.review.pullRequest.prNumber,
+      const waitingForGreptileReviewSinceMs = Date.now()
+
+      yield* options.github.requestPullRequestReview({
+        pullRequestNumber: options.review.pullRequest.prNumber,
         repo: options.review.pullRequest.repo,
       }).pipe(Effect.mapError(toRunnerFailure))
 
-      if (options.review.triggerLabelPresent) {
-        yield* options.github.removePullRequestLabel({
-          label: reviewTriggerLabel,
-          pullRequestNumber: options.review.pullRequest.prNumber,
-          repo: options.review.pullRequest.repo,
-        }).pipe(Effect.mapError(toRunnerFailure))
-      }
+      yield* options.pullRequestStore.markGreptileReviewRequested({
+        lastReviewedAtMs: options.review.latestFeedbackAtMs,
+        prNumber: options.review.pullRequest.prNumber,
+        repo: options.review.pullRequest.repo,
+        waitingForGreptileReviewSinceMs,
+      }).pipe(Effect.mapError(toRunnerFailure))
 
       yield* options.runState.update({
         prNumber: finalizedPullRequest.pullRequest.number,
@@ -460,7 +460,11 @@ const runReview = (options: {
         stage: "waiting-for-review",
       })
       yield* options.linear.commentOnIssue({
-        body: [`Orca updated the pull request for ${options.review.pullRequest.issueIdentifier}.`, "", `- PR: ${finalizedPullRequest.pullRequest.url}`].join("\n"),
+        body: [
+          `Orca updated the pull request for ${options.review.pullRequest.issueIdentifier} and requested another Greptile review.`,
+          "",
+          `- PR: ${finalizedPullRequest.pullRequest.url}`,
+        ].join("\n"),
         issueId: options.review.pullRequest.issueId,
       }).pipe(Effect.mapError(toRunnerFailure))
 

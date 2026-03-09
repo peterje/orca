@@ -43,6 +43,26 @@ describe("PromptGen", () => {
       expect(result.promptFileContents).toContain("- Create the PR with `gh pr create` and a HEREDOC body so the formatting is preserved.")
       expect(result.promptFileContents).toContain("- Write the PR body in lowercase narrative prose, use only `###` and `####` headings, include the verification commands you ran under `### verification`, and end with `closes PET-20`.")
     }).pipe(Effect.provide(makePromptGenLayer())))
+
+  it.effect("guides review follow-up around Greptile feedback", () =>
+    Effect.gen(function* () {
+      const promptGen = yield* PromptGen
+      const result = yield* promptGen.buildReviewPrompt({
+        baseBranch: "main",
+        branch: "orca/pet-17-greptile-loop",
+        issueDescription: "Requeue failing Greptile reviews.",
+        issueIdentifier: "PET-17",
+        issueTitle: "Greptile review loop",
+        pullRequestUrl: "https://github.com/peterje/orca/pull/17",
+        reviewFeedback: "# Greptile review\n\nConfidence: 4/5",
+        verify: ["bun run check", "bun run test"],
+      })
+
+      expect(result.prompt).toContain("Greptile")
+      expect(result.promptFileContents).toContain("## Greptile review feedback")
+      expect(result.promptFileContents).toContain("- Address the requested Greptile feedback and keep the existing pull request moving.")
+      expect(result.promptFileContents).toContain("- Have the existing branch ready for another Greptile review pass.")
+    }).pipe(Effect.provide(makePromptGenLayer())))
 })
 
 const makePromptGenLayer = () =>
