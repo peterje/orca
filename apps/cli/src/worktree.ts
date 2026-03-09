@@ -47,6 +47,12 @@ export const WorktreeLive = Effect.gen(function* () {
         Effect.mapError((cause) => new WorktreeError({ message: `Failed to create ${worktreesRoot}.`, cause })),
       )
 
+      const startPoint = yield* ensureRemoteBaseBranch({
+        baseBranch: options.baseBranch,
+        repoRoot,
+        spawner,
+      })
+
       const { branch, directory } = yield* allocateCandidate({
         baseDirectory: worktreesRoot,
         baseName: makeIssueName(options.issueIdentifier, options.issueTitle),
@@ -59,7 +65,7 @@ export const WorktreeLive = Effect.gen(function* () {
 
       const addExitCode = yield* spawner.exitCode(
         makeShellCommand({
-          command: `git worktree add -b ${shellQuote(branch)} ${shellQuote(directory)} ${shellQuote(options.baseBranch)}`,
+          command: `git worktree add -b ${shellQuote(branch)} ${shellQuote(directory)} ${shellQuote(startPoint)}`,
           cwd: repoRoot,
         }),
       ).pipe(
@@ -140,6 +146,12 @@ export const slugifyIssueTitle = (title: string) => {
 const makeIssueName = (identifier: string, title: string) => `${identifier}-${slugifyIssueTitle(title)}`
 
 const makeBranchWorktreeName = (branch: string) => slugifyIssueTitle(branch.replace(/\//g, "-"))
+
+export const makeRemoteBaseRef = (baseBranch: string) => `origin/${baseBranch}`
+
+const makeRemoteBranchRef = (baseBranch: string) => `refs/heads/${baseBranch}`
+
+const makeRemoteTrackingRef = (baseBranch: string) => `refs/remotes/origin/${baseBranch}`
 
 const allocateCandidate = (options: {
   readonly baseDirectory: string
@@ -224,6 +236,45 @@ const ensureLocalBranch = (options: {
         new WorktreeError({ message: `Failed to fetch branch ${options.branch} from origin.` }),
       )
     }
+  })
+
+const ensureRemoteBaseBranch = (options: {
+  readonly baseBranch: string
+  readonly repoRoot: string
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]
+}) =>
+  Effect.gen(function* () {
+    const remoteBaseRef = makeRemoteBaseRef(options.baseBranch)
+    const remoteTrackingRef = makeRemoteTrackingRef(options.baseBranch)
+    const fetchExitCode = yield* options.spawner.exitCode(
+      makeShellCommand({
+        command: `git fetch origin ${shellQuote(`+${makeRemoteBranchRef(options.baseBranch)}:${remoteTrackingRef}`)}`,
+        cwd: options.repoRoot,
+      }),
+    ).pipe(
+      Effect.mapError((cause) => new WorktreeError({ message: `Failed to fetch remote base branch ${remoteBaseRef}.`, cause })),
+    )
+    if (fetchExitCode !== 0) {
+      return yield* Effect.fail(
+        new WorktreeError({ message: `Failed to fetch remote base branch ${remoteBaseRef}.` }),
+      )
+    }
+
+    const remoteBranchExists = yield* options.spawner.exitCode(
+      makeShellCommand({
+        command: `git show-ref --verify --quiet ${shellQuote(remoteTrackingRef)}`,
+        cwd: options.repoRoot,
+      }),
+    ).pipe(
+      Effect.mapError((cause) => new WorktreeError({ message: `Failed to verify remote base branch ${remoteBaseRef}.`, cause })),
+    )
+    if (remoteBranchExists !== 0) {
+      return yield* Effect.fail(
+        new WorktreeError({ message: `Remote base branch ${remoteBaseRef} is not available after fetch.` }),
+      )
+    }
+
+    return remoteBaseRef
   })
 
 const runSetup = (managed: ManagedWorktree, commands: ReadonlyArray<string>) =>
