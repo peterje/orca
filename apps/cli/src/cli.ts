@@ -10,6 +10,7 @@ import { commandLinear } from "./commands/linear.ts"
 import { commandRun } from "./commands/run.ts"
 import { commandRoot } from "./commands/root.ts"
 import { commandServe } from "./commands/serve.ts"
+import { commandStatus } from "./commands/status.ts"
 import { AgentRunnerLayer } from "./agent-runner.ts"
 import { GitHubLayer } from "./github.ts"
 import { LinearApiError } from "./linear.ts"
@@ -20,6 +21,7 @@ import {
 } from "./linear/token-manager.ts"
 import { PromptGenLayer } from "./prompt-gen.ts"
 import { PullRequestStoreLayer } from "./pull-request-store.ts"
+import { MissionControlError, MissionControlLayer } from "./mission-control.ts"
 import { RepoConfigError, RepoConfigLayer } from "./repo-config.ts"
 import { RunnerFailure, RunnerLayer, RunnerNoWorkError } from "./runner.ts"
 import { RunStateBusyError, RunStateLayer } from "./run-state.ts"
@@ -28,7 +30,7 @@ import { VerifierLayer } from "./verifier.ts"
 import { WorktreeLayer } from "./worktree.ts"
 
 const program = Command.run(
-  commandRoot.pipe(Command.withSubcommands([commandLinear, commandInit, commandIssues, commandRun, commandServe])),
+  commandRoot.pipe(Command.withSubcommands([commandLinear, commandInit, commandIssues, commandRun, commandServe, commandStatus])),
   {
     version: PackageJson.version,
   },
@@ -46,8 +48,9 @@ const supportLayer = Layer.mergeAll(
 ).pipe(Layer.provide(PlatformServices))
 
 const executionLayer = RunnerLayer.pipe(Layer.provide([LinearLayer, supportLayer]))
+const missionControlLayer = MissionControlLayer.pipe(Layer.provide([LinearLayer, supportLayer]))
 
-const appLayer = Layer.mergeAll(PlatformServices, LinearLayer, supportLayer, executionLayer)
+const appLayer = Layer.mergeAll(PlatformServices, LinearLayer, supportLayer, executionLayer, missionControlLayer)
 
 const provided = Effect.provide(program, appLayer)
 
@@ -55,6 +58,7 @@ const handled = Effect.catchTags(provided, {
   LinearAuthRequiredError: renderAndExit,
   LinearOAuthError: renderAndExit,
   LinearApiError: renderAndExit,
+  MissionControlError: renderAndExit,
   RepoConfigError: renderAndExit,
   RunnerFailure: renderAndExit,
   RunnerNoWorkError: renderAndExit,

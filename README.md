@@ -56,7 +56,15 @@ It prints actionable work, blocked work, and a dependency graph.
 bun run orca serve
 ```
 
-This polls Linear every 30 seconds and prints the issue Orca would implement next.
+This polls Linear every 30 seconds and prints a mission-control snapshot with the current stage, the next item up, and the queue state.
+
+### Inspect mission control once
+
+```bash
+bun run orca status
+```
+
+This prints the same high-level snapshot once without starting the polling loop.
 
 ### Execute work
 
@@ -79,7 +87,8 @@ In execution mode, Orca creates a git worktree under `./.orca/worktrees/`, runs 
 - `bun run orca init` - create or update repo-local Orca config
 - `bun run orca linear auth` - authenticate with Linear via OAuth PKCE
 - `bun run orca issues list` - show actionable and blocked Orca work
-- `bun run orca serve` - poll Linear and print the next issue
+- `bun run orca status` - show the current mission-control snapshot
+- `bun run orca serve` - poll Linear and keep the mission-control snapshot updated
 - `bun run orca run next` - execute the top actionable issue once
 
 You can also build the standalone CLI binary with:

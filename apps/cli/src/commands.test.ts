@@ -6,7 +6,9 @@ import { TestClock, TestConsole } from "effect/testing"
 import { commandIssues } from "./commands/issues.ts"
 import { commandRoot } from "./commands/root.ts"
 import { commandServe } from "./commands/serve.ts"
+import { commandStatus } from "./commands/status.ts"
 import { Linear, type LinearIssue } from "./linear.ts"
+import { MissionControl, type MissionControlSnapshot } from "./mission-control.ts"
 import { RunState, type ActiveRun } from "./run-state.ts"
 import { Runner } from "./runner.ts"
 
@@ -184,22 +186,35 @@ describe("CLI commands", () => {
       yield* Fiber.interrupt(fiber)
 
       expect(yield* TestConsole.logLines).toEqual([
-        "Would implement: ENG-1 First issue",
-        "Would implement: ENG-2 Second issue",
-        "No actionable Orca work is currently available.",
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-1 First issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-2 Second issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Mission control",
+        "- current: idle",
+        "- next: nothing ready right now",
+        "- issue queue: 0 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
       ])
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          sequencingRunnerLayer([
-            Option.some({ id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" }),
-            Option.some({ id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" }),
-            Option.some({ id: "issue-2", issueIdentifier: "ENG-2", kind: "implementation", title: "Second issue" }),
-            Option.none(),
-            Option.none(),
+          sequencingMissionControlLayer([
+            snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+            snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+            snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+            snapshot({}),
+            snapshot({}),
           ]),
+          sequencingRunnerLayer([Option.none(), Option.none(), Option.none()]),
         ),
       ),
     ))
@@ -214,26 +229,60 @@ describe("CLI commands", () => {
       yield* Fiber.interrupt(fiber)
 
       expect(yield* TestConsole.logLines).toEqual([
-        "Would review: ENG-9 Existing PR (https://github.com/peterje/orca/pull/9)",
-        "Would implement: ENG-10 New issue",
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-9 Existing PR - review feedback ready",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 1 ready for follow-up",
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-10 New issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
       ])
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          sequencingRunnerLayer([
-            Option.some({
-              id: "peterje/orca#9",
-              issueIdentifier: "ENG-9",
-              kind: "review",
-              pullRequestNumber: 9,
-              pullRequestUrl: "https://github.com/peterje/orca/pull/9",
-              title: "Existing PR",
+          sequencingMissionControlLayer([
+            snapshot({
+              issues: { blockedCount: 0, readyToPickUpCount: 1 },
+              next: { issueIdentifier: "ENG-9", issueTitle: "Existing PR", stage: "review-feedback-ready" },
+              reviews: { readyForFollowUpCount: 1, waitingForReviewCount: 0 },
             }),
-            Option.some({ id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" }),
-            Option.some({ id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" }),
+            snapshot({ next: { issueIdentifier: "ENG-10", issueTitle: "New issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+            snapshot({ next: { issueIdentifier: "ENG-10", issueTitle: "New issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
           ]),
+          sequencingRunnerLayer([Option.none(), Option.none(), Option.none()]),
+        ),
+      ),
+    ))
+
+  it.effect("status renders the current mission control snapshot", () =>
+    Effect.gen(function* () {
+      const run = makeStatusCliRunner()
+
+      yield* run(["status"])
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Mission control",
+        "- current: ENG-11 Active issue - running verification",
+        "- next: ENG-12 Next issue - ready to pick up",
+        "- issue queue: 2 ready to pick up, 1 blocked",
+        "- review queue: 1 waiting for review, 1 ready for follow-up",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          fixedMissionControlLayer(snapshot({
+            current: { issueIdentifier: "ENG-11", issueTitle: "Active issue", stage: "verifying" },
+            issues: { blockedCount: 1, readyToPickUpCount: 2 },
+            next: { issueIdentifier: "ENG-12", issueTitle: "Next issue", stage: "ready-to-pick-up" },
+            reviews: { readyForFollowUpCount: 1, waitingForReviewCount: 1 },
+          })),
         ),
       ),
     ))
@@ -244,6 +293,9 @@ const makeIssuesCliRunner = () =>
 
 const makeServeCliRunner = () =>
   Command.runWith(commandRoot.pipe(Command.withSubcommands([commandServe])), { version: "0.0.0" })
+
+const makeStatusCliRunner = () =>
+  Command.runWith(commandRoot.pipe(Command.withSubcommands([commandStatus])), { version: "0.0.0" })
 
 const cliEnvironmentLayer = Layer.mergeAll(
   FileSystem.layerNoop({}),
@@ -315,6 +367,39 @@ const sequencingRunnerLayer = (
       })
     }),
   )
+
+const fixedMissionControlLayer = (mission: MissionControlSnapshot) =>
+  Layer.succeed(
+    MissionControl,
+    MissionControl.of({
+      snapshot: Effect.succeed(mission),
+    }),
+  )
+
+const sequencingMissionControlLayer = (snapshots: ReadonlyArray<MissionControlSnapshot>) =>
+  Layer.effect(
+    MissionControl,
+    Effect.gen(function* () {
+      const index = yield* Ref.make(0)
+
+      return MissionControl.of({
+        snapshot: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? snapshot({}), current + 1]),
+      })
+    }),
+  )
+
+const snapshot = (overrides?: Partial<MissionControlSnapshot>): MissionControlSnapshot => ({
+  current: overrides?.current ?? null,
+  issues: {
+    blockedCount: overrides?.issues?.blockedCount ?? 0,
+    readyToPickUpCount: overrides?.issues?.readyToPickUpCount ?? 0,
+  },
+  next: overrides?.next ?? null,
+  reviews: {
+    readyForFollowUpCount: overrides?.reviews?.readyForFollowUpCount ?? 0,
+    waitingForReviewCount: overrides?.reviews?.waitingForReviewCount ?? 0,
+  },
+})
 
 const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "identifier" | "title">): LinearIssue => ({
   blockedBy: overrides.blockedBy ?? [],
