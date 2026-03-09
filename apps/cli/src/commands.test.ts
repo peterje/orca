@@ -10,7 +10,7 @@ import { commandStatus } from "./commands/status.ts"
 import { Linear, type LinearIssue } from "./linear.ts"
 import { MissionControl, type MissionControlSnapshot } from "./mission-control.ts"
 import { RunState, type ActiveRun } from "./run-state.ts"
-import { Runner } from "./runner.ts"
+import { Runner, RunnerFailure } from "./runner.ts"
 
 describe("CLI commands", () => {
   it.effect("renders the issues list with actionable and blocked sections", () =>
@@ -259,6 +259,45 @@ describe("CLI commands", () => {
       ),
     ))
 
+  it.effect("serve keeps polling when waiting pull request polling fails", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(2_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-1 First issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-2 Second issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingMissionControlLayer([
+            snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+            snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+            snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+          ]),
+          sequencingRunnerLayer(
+            [Option.none(), Option.none(), Option.none()],
+            { pollWaitingPullRequests: Effect.fail(new RunnerFailure({ message: "boom" })) },
+          ),
+        ),
+      ),
+    ))
+
   it.effect("status renders the current mission control snapshot", () =>
     Effect.gen(function* () {
       const run = makeStatusCliRunner()
@@ -355,6 +394,9 @@ const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<LinearIssu
 
 const sequencingRunnerLayer = (
   snapshots: ReadonlyArray<Option.Option<{ readonly id: string; readonly issueIdentifier: string; readonly kind: "implementation"; readonly title: string } | { readonly id: string; readonly issueIdentifier: string; readonly kind: "review"; readonly pullRequestNumber: number; readonly pullRequestUrl: string; readonly title: string }>>,
+  options?: {
+    readonly pollWaitingPullRequests?: Effect.Effect<void, RunnerFailure>
+  },
 ) =>
   Layer.effect(
     Runner,
@@ -363,7 +405,7 @@ const sequencingRunnerLayer = (
 
       return Runner.of({
         peekNext: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? Option.none(), current + 1]),
-        pollWaitingPullRequests: Effect.void,
+        pollWaitingPullRequests: options?.pollWaitingPullRequests ?? Effect.void,
         runNext: Effect.die("not used in this test"),
       })
     }),

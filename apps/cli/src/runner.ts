@@ -153,12 +153,18 @@ export const RunnerLive = Effect.gen(function* () {
             }).pipe(Effect.mapError(toRunnerFailure))
           }
 
-          yield* pullRequestStore.markGreptileCompleted({
+          const updatedPullRequest = yield* pullRequestStore.markGreptileCompleted({
             completedAtMs: Date.now(),
             lastReviewedAtMs: latestGreptileReview.review.createdAtMs,
             prNumber: pullRequest.prNumber,
             repo: pullRequest.repo,
           }).pipe(Effect.mapError(toRunnerFailure))
+
+          if (updatedPullRequest === null) {
+            return yield* Effect.fail(new RunnerFailure({
+              message: `PR #${pullRequest.prNumber} in ${pullRequest.repo} was not found in the store when marking Greptile complete.`,
+            }))
+          }
         }),
       { concurrency: 1, discard: true },
     )

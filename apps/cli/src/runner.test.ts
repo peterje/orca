@@ -276,6 +276,50 @@ describe("Runner", () => {
     )
   })
 
+  it.effect("fails polling when a completed Greptile review cannot be recorded in the store", () => {
+    const readyForReviewRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const failure = yield* runner.pollWaitingPullRequests.pipe(Effect.flip)
+
+        expect(readyForReviewRequests).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(failure.message).toBe("PR #42 in peterje/orca was not found in the store when marking Greptile complete.")
+      }).pipe(Effect.provide(makeRunnerLayer({
+        markGreptileCompletedReturnsNull: true,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            isDraft: true,
+            number: 42,
+            reviews: [
+              {
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence: 5/5",
+                createdAtMs: 30,
+                id: "review-2",
+                isBot: true,
+              },
+            ],
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        readyForReviewRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
   it.effect("reads waiting pull request feedback once during runNext selection", () => {
     const readPullRequestFeedbackRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
 
@@ -596,6 +640,7 @@ const makeRunnerLayer = (options: {
     readonly prNumber: number
     readonly repo: string
   }>
+  readonly markGreptileCompletedReturnsNull?: boolean
   readonly issues?: ReadonlyArray<LinearIssue>
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
   readonly readPullRequestFeedbackRequests?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
@@ -739,6 +784,9 @@ const makeRunnerLayer = (options: {
             markGreptileCompleted: (record) =>
               Effect.sync(() => {
                 greptileCompletedPullRequests.push(record)
+                if (options.markGreptileCompletedReturnsNull) {
+                  return null
+                }
                 const existing = trackedPullRequests.find((pullRequest) => pullRequest.repo === record.repo && pullRequest.prNumber === record.prNumber) ?? null
                 if (existing === null) {
                   return null
