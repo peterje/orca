@@ -179,7 +179,7 @@ const findLatestEntry = <A extends { readonly createdAtMs: number }>(entries: Re
 }
 
 const parseGreptileReviewScore = (body: string): GreptileReviewScore | null => {
-  const match = body.match(/\b(?:confidence|score)\b[^\d]*(\d+)\s*\/\s*(\d+)\b/i) ?? body.match(/\b(\d+)\s*\/\s*(\d+)\b/)
+  const match = body.match(/\b(?:confidence|score)\b[^\d]*(\d+)\s*\/\s*(\d+)\b/i)
   if (match === null) {
     return null
   }

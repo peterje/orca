@@ -353,6 +353,78 @@ describe("Runner", () => {
     })
   })
 
+  it.effect("records the waiting timestamp after the Greptile review request completes", () => {
+    const requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+    const recordedGreptileReviewRequests: Array<{
+      readonly lastReviewedAtMs: number
+      readonly prNumber: number
+      readonly repo: string
+      readonly waitingForGreptileReviewSinceMs: number
+    }> = []
+    const originalDateNow = Date.now
+    let reviewRequested = false
+
+    Date.now = () => (reviewRequested ? 200 : 100)
+
+    return withTempDirectory((tempDirectory) => {
+      const worktreeDirectory = join(tempDirectory, "worktree")
+      mkdirSync(worktreeDirectory, { recursive: true })
+
+      return Effect.gen(function* () {
+        const runner = yield* Runner
+        yield* runner.runNext
+
+        expect(requestedReviews).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(recordedGreptileReviewRequests).toHaveLength(1)
+        expect(recordedGreptileReviewRequests[0]?.waitingForGreptileReviewSinceMs).toBe(200)
+      }).pipe(
+        Effect.provide(makeRunnerLayer({
+          currentPullRequest: {
+            isDraft: true,
+            number: 42,
+            state: "OPEN",
+            url: "https://github.com/peterje/orca/pull/42",
+          },
+          pullRequestFeedbackByKey: {
+            "peterje/orca#42": pullRequestFeedback({
+              number: 42,
+              reviewThreads: [
+                {
+                  comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 55, isBot: true })],
+                  isCollapsed: false,
+                  isResolved: false,
+                },
+              ],
+              reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 60, id: "review-42", isBot: true })],
+              url: "https://github.com/peterje/orca/pull/42",
+            }),
+          },
+          recordedGreptileReviewRequests,
+          requestedReviews,
+          requestPullRequestReview: (request) =>
+            Effect.sync(() => {
+              reviewRequested = true
+              requestedReviews.push(request)
+            }),
+          trackedPullRequests: [
+            trackedPullRequest({
+              issueId: "issue-1",
+              issueIdentifier: "ENG-1",
+              issueTitle: "Existing work",
+              prNumber: 42,
+              prUrl: "https://github.com/peterje/orca/pull/42",
+              waitingForGreptileReviewSinceMs: 10,
+            }),
+          ],
+          worktreeDirectory,
+        })),
+        Effect.ensuring(Effect.sync(() => {
+          Date.now = originalDateNow
+        })),
+      )
+    })
+  })
+
   it.effect("allows only one active coding run at a time", () =>
     withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -385,6 +457,10 @@ const makeRunnerLayer = (options: {
     readonly repo: string
     readonly waitingForGreptileReviewSinceMs: number
   }>
+  readonly requestPullRequestReview?: (request: {
+    readonly pullRequestNumber: number
+    readonly repo: string
+  }) => Effect.Effect<void>
   readonly reviewPromptRequests?: Array<{
     readonly baseBranch: string
     readonly branch: string
@@ -455,10 +531,11 @@ const makeRunnerLayer = (options: {
                 }),
               ),
             removePullRequestLabel: () => Effect.die("not used in this test"),
-            requestPullRequestReview: (request) =>
-              Effect.sync(() => {
-                requestedReviews.push(request)
-              }),
+            requestPullRequestReview: options.requestPullRequestReview
+              ?? ((request) =>
+                Effect.sync(() => {
+                  requestedReviews.push(request)
+                })),
             viewCurrentPullRequest: () =>
               Effect.succeed(
                 options.currentPullRequest === undefined || options.currentPullRequest === null

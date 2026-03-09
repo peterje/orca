@@ -433,12 +433,12 @@ const runReview = (options: {
         worktree: managedWorktree,
       }).pipe(Effect.mapError(toRunnerFailure))
 
-      const waitingForGreptileReviewSinceMs = Date.now()
-
       yield* options.github.requestPullRequestReview({
         pullRequestNumber: options.review.pullRequest.prNumber,
         repo: options.review.pullRequest.repo,
       }).pipe(Effect.mapError(toRunnerFailure))
+
+      const waitingForGreptileReviewSinceMs = Date.now()
 
       yield* options.pullRequestStore.markGreptileReviewRequested({
         lastReviewedAtMs: options.review.latestFeedbackAtMs,

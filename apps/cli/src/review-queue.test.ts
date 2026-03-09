@@ -70,6 +70,24 @@ describe("review queue", () => {
 
     expect(pending).toBeNull()
   })
+
+  it("requires an explicit confidence or score label when parsing Greptile review scores", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviews: [
+          review({
+            authorLogin: "greptile-apps[bot]",
+            body: "Updated 3/5 files while reviewing this pull request.",
+            createdAtMs: 50,
+            isBot: true,
+          }),
+        ],
+      }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
+    })
+
+    expect(pending).toBeNull()
+  })
 })
 
 const pullRequest = (overrides?: Partial<{
