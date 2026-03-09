@@ -167,9 +167,7 @@ export const LinearLive = Layer.effect(
       }).pipe(Effect.asVoid)
 
     const markIssueInProgress = (issue: LinearIssue) => {
-      const nextState = issue.teamStates.find(
-        (state) => state.type.toLowerCase() === "started" || state.name.toLowerCase() === "in progress",
-      )
+      const nextState = findInProgressState(issue.teamStates)
 
       if (!nextState || nextState.id === issue.stateId) {
         return Effect.void
@@ -330,6 +328,31 @@ const mapLinearIssues = (
 
 const compareLinearIssues = (left: LinearIssue, right: LinearIssue) =>
   right.createdAtMs - left.createdAtMs || left.identifier.localeCompare(right.identifier)
+
+const findInProgressState = (teamStates: ReadonlyArray<LinearWorkflowState>) => {
+  const namedMatch = teamStates.find(
+    (state) => state.type.toLowerCase() === "started" && normalizeWorkflowStateName(state.name) === "in progress",
+  )
+  if (namedMatch) {
+    return namedMatch
+  }
+
+  const startedStates = teamStates.filter((state) => state.type.toLowerCase() === "started")
+  if (startedStates.length === 1) {
+    return isReviewState(startedStates[0]!.name) ? undefined : startedStates[0]
+  }
+
+  return startedStates.find((state) => !isReviewState(state.name))
+}
+
+const normalizeWorkflowStateName = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+
+const isReviewState = (name: string) => /\breview\b/i.test(name)
 
 const isTerminalState = (stateType: string) => {
   const normalized = stateType.toLowerCase()
