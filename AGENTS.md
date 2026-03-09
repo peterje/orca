@@ -1,7 +1,22 @@
-- Use `bun` for package management instead of `npm` or `pnpm`
-- Use the Bun runtime instead of Node
-- Use the most up to date version of Effect's v4 beta.
-- Always consult the Effect source code in ~/.reference/effect-v4/ before writing code to see if it provides a primitive already, and to see how to implement.
-- Use ~/Workspace/lalph as a reference for implementing this project
-- Use kebab-case for all file names.
+<general>
+- use `bun` for package management instead of `npm` or `pnpm`
+- use the bun runtime instead of node
+- use the most up to date version of effect's v4 beta.
+- always consult the effect source code in ~/.reference/effect-v4/ before writing code to see if it provides a primitive already, and to see how to implement.
+- use ~/workspace/lalph as a reference for implementing this project
+- use kebab-case for all file names.
+</general>
+
+<git>
+- test and typecheck before committing.
+- commit directly to main
+- always use conventional commits.
+- prefer lowercase.
+   - "cli", not "CLI"
+   - "github", not "GitHub"
+   - "http", not "HTTP"
+- write commits and descriptions in imperative mood
+- all pr commits will be squashed: ensure pr titles follow the same rules as commits
+</git>
+
 
