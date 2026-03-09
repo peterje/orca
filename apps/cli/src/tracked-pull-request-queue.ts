@@ -61,6 +61,10 @@ export const summarizeTrackedPullRequestQueue = (
 
     openPullRequests.push(trackedPullRequest.pullRequest)
 
+    if (!isTrackedForGreptileLoop(trackedPullRequest.pullRequest)) {
+      continue
+    }
+
     const pendingReview = findPendingPullRequestReview(trackedPullRequest)
     if (pendingReview !== null) {
       pendingReviews.push(pendingReview)
@@ -83,3 +87,6 @@ export const summarizeTrackedPullRequestQueue = (
 }
 
 const isOpenPullRequest = (feedback: PullRequestFeedback) => feedback.state.toUpperCase() === "OPEN"
+
+const isTrackedForGreptileLoop = (pullRequest: OrcaManagedPullRequest) =>
+  pullRequest.greptileCompletedAtMs === null

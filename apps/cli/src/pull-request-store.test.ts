@@ -33,6 +33,7 @@ describe("PullRequestStore", () => {
       Effect.gen(function* () {
         const record = {
           branch: "orca/eng-1-example-issue",
+          greptileCompletedAtMs: null,
           issueDescription: "Example issue description",
           issueId: "issue-1",
           issueIdentifier: "ENG-1",
@@ -49,6 +50,36 @@ describe("PullRequestStore", () => {
 
         expect(reloaded).toHaveLength(1)
         expect(reloaded[0]?.waitingForGreptileReviewSinceMs).toBe(record.waitingForGreptileReviewSinceMs)
+      }),
+    ))
+
+  it.effect("persists terminal Greptile state across restarts", () =>
+    withTempCwd(() =>
+      Effect.gen(function* () {
+        yield* withStore((store) => store.upsert({
+          branch: "orca/eng-1-example-issue",
+          issueDescription: "Example issue description",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-1",
+          issueTitle: "Example issue",
+          prNumber: 42,
+          prUrl: "https://github.com/peterje/orca/pull/42",
+          repo: "peterje/orca",
+          waitingForGreptileReviewSinceMs: 1_700_000_000_000,
+        }))
+
+        yield* withStore((store) => store.markGreptileCompleted({
+          completedAtMs: 1_700_000_000_100,
+          lastReviewedAtMs: 1_700_000_000_050,
+          prNumber: 42,
+          repo: "peterje/orca",
+        }))
+
+        const reloaded = yield* withStore((store) => store.list)
+
+        expect(reloaded).toHaveLength(1)
+        expect(reloaded[0]?.greptileCompletedAtMs).toBe(1_700_000_000_100)
+        expect(reloaded[0]?.waitingForGreptileReviewSinceMs).toBeNull()
       }),
     ))
 
@@ -78,6 +109,7 @@ describe("PullRequestStore", () => {
         const records = yield* withStore((store) => store.list)
 
         expect(records).toHaveLength(1)
+        expect(records[0]?.greptileCompletedAtMs).toBeNull()
         expect(records[0]?.waitingForGreptileReviewSinceMs).toBeNull()
       }),
     ))

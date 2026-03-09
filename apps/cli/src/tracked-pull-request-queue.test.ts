@@ -72,6 +72,7 @@ const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Typ
   new OrcaManagedPullRequest({
     branch: overrides.branch ?? `orca/${overrides.issueIdentifier.toLowerCase()}`,
     createdAtMs: overrides.createdAtMs ?? 1,
+    greptileCompletedAtMs: overrides.greptileCompletedAtMs ?? null,
     issueDescription: overrides.issueDescription ?? "Example issue description",
     issueId: overrides.issueId,
     issueIdentifier: overrides.issueIdentifier,

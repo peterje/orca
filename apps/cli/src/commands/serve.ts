@@ -26,6 +26,7 @@ export const commandServe = Command.make(
     while (true) {
       const runState = yield* RunState
       const activeRun = yield* runState.current.pipe(Effect.orElseSucceed(() => null))
+      yield* runner.pollWaitingPullRequests.pipe(Effect.orElseSucceed(() => undefined))
       const snapshot = yield* missionControl.snapshot
       const snapshotKey = JSON.stringify(snapshot)
       const shouldHeartbeat = activeRun === null && snapshot.next === null

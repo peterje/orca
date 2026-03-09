@@ -63,6 +63,10 @@ export type GitHubService = {
     readonly pullRequestNumber: number
     readonly repo: string
   }) => Effect.Effect<PullRequestFeedback, GitHubError>
+  markPullRequestReadyForReview: (options: {
+    readonly pullRequestNumber: number
+    readonly repo: string
+  }) => Effect.Effect<void, GitHubError>
   removePullRequestLabel: (options: {
     readonly label: string
     readonly pullRequestNumber: number
@@ -275,9 +279,36 @@ export const GitHubLive = Effect.gen(function* () {
             })),
     )
 
+  const markPullRequestReadyForReview = (options: {
+    readonly pullRequestNumber: number
+    readonly repo: string
+  }) =>
+    ChildProcess.make(
+      "gh",
+      ["pr", "ready", String(options.pullRequestNumber), "--repo", options.repo],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    ).pipe(
+      spawner.exitCode,
+      Effect.flatMap((exitCode) =>
+        exitCode === 0
+          ? Effect.void
+          : Effect.fail(new GitHubError({ message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.` }))),
+      Effect.mapError((cause) =>
+        cause instanceof GitHubError
+          ? cause
+          : new GitHubError({
+              message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.`,
+              cause,
+            })),
+    )
+
   return GitHub.of({
     createPullRequest,
     detectRepo,
+    markPullRequestReadyForReview,
     readPullRequestFeedback,
     removePullRequestLabel,
     requestPullRequestReview,

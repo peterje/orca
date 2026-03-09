@@ -6,7 +6,7 @@ import { Linear, type LinearService } from "./linear.ts"
 import { PromptGen, PromptGenError } from "./prompt-gen.ts"
 import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
-import { type PendingPullRequestReview } from "./review-queue.ts"
+import { findLatestGreptileReviewScore, type PendingPullRequestReview } from "./review-queue.ts"
 import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
 import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
@@ -36,6 +36,7 @@ export type RunnerWorkItem =
     }
 
 export type RunnerService = {
+  readonly pollWaitingPullRequests: Effect.Effect<void, RunnerFailure>
   readonly peekNext: Effect.Effect<Option.Option<RunnerWorkItem>, RunnerFailure | RepoConfigError>
   readonly runNext: Effect.Effect<RunnerResult, RunnerFailure | RunnerNoWorkError | RepoConfigError | RunStateBusyError>
 }
@@ -60,6 +61,11 @@ type SelectedWork =
 type FinalizedPullRequest = {
   readonly pullRequest: PullRequestInfo
   readonly wasCreated: boolean
+}
+
+type WaitingForGreptileReviewPullRequest = OrcaManagedPullRequest & {
+  readonly greptileCompletedAtMs: null
+  readonly waitingForGreptileReviewSinceMs: number
 }
 
 export const RunnerLive = Effect.gen(function* () {
@@ -98,6 +104,57 @@ export const RunnerLive = Effect.gen(function* () {
     }
 
     return Option.some({ config, issue, kind: "implementation", plan } satisfies SelectedWork)
+  })
+
+  const pollWaitingPullRequests = Effect.gen(function* () {
+    const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
+
+    yield* Effect.forEach(
+      storedPullRequests.filter(isWaitingForGreptileReview),
+      (pullRequest) =>
+        Effect.gen(function* () {
+          const waitingSince = pullRequest.waitingForGreptileReviewSinceMs
+          const feedback = yield* github.readPullRequestFeedback({
+            pullRequestNumber: pullRequest.prNumber,
+            repo: pullRequest.repo,
+          }).pipe(Effect.mapError(toRunnerFailure))
+          if (feedback.state.toUpperCase() !== "OPEN") {
+            return
+          }
+
+          const latestGreptileReview = findLatestGreptileReviewScore(feedback)
+
+          if (
+            latestGreptileReview === null
+            || latestGreptileReview.review.createdAtMs < waitingSince
+            || latestGreptileReview.achieved !== 5
+            || latestGreptileReview.total !== 5
+          ) {
+            return
+          }
+
+          if (feedback.isDraft) {
+            yield* github.markPullRequestReadyForReview({
+              pullRequestNumber: pullRequest.prNumber,
+              repo: pullRequest.repo,
+            }).pipe(Effect.mapError(toRunnerFailure))
+          }
+
+          const updatedPullRequest = yield* pullRequestStore.markGreptileCompleted({
+            completedAtMs: Date.now(),
+            lastReviewedAtMs: latestGreptileReview.review.createdAtMs,
+            prNumber: pullRequest.prNumber,
+            repo: pullRequest.repo,
+          }).pipe(Effect.mapError(toRunnerFailure))
+
+          if (updatedPullRequest === null) {
+            return yield* Effect.fail(new RunnerFailure({
+              message: `PR #${pullRequest.prNumber} in ${pullRequest.repo} was not found in the store when marking Greptile complete.`,
+            }))
+          }
+        }),
+      { concurrency: 1, discard: true },
+    )
   })
 
   const peekNext = selectNextWork.pipe(
@@ -159,7 +216,7 @@ export const RunnerLive = Effect.gen(function* () {
         }))
   })
 
-  return Runner.of({ peekNext, runNext })
+  return Runner.of({ peekNext, pollWaitingPullRequests, runNext })
 })
 
 export const RunnerLayer = Layer.effect(Runner, RunnerLive)
@@ -634,6 +691,10 @@ const makePullRequestBody = (issueIdentifier: string, issueTitle: string, verify
     `closes ${issueIdentifier}`,
   ].join("\n")
 
+const isWaitingForGreptileReview = (
+  pullRequest: OrcaManagedPullRequest,
+): pullRequest is WaitingForGreptileReviewPullRequest =>
+  pullRequest.greptileCompletedAtMs === null && pullRequest.waitingForGreptileReviewSinceMs !== null
 const formatIssueLabel = (issueIdentifier: string, issueTitle: string) =>
   issueTitle.trim().length > 0 ? `${issueIdentifier} ${issueTitle}` : issueIdentifier
 
