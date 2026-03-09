@@ -27,10 +27,11 @@ export type PullRequestStoreService = {
     readonly prNumber: number
     readonly repo: string
   }) => Effect.Effect<OrcaManagedPullRequest | null, PullRequestStoreError>
-  readonly markReviewHandled: (options: {
+  readonly markGreptileReviewRequested: (options: {
     readonly lastReviewedAtMs: number
     readonly prNumber: number
     readonly repo: string
+    readonly waitingForGreptileReviewSinceMs: number
   }) => Effect.Effect<OrcaManagedPullRequest | null, PullRequestStoreError>
   readonly upsert: (record: {
     readonly branch: string
@@ -164,10 +165,11 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return updated
     })
 
-  const markReviewHandled = (options: {
+  const markGreptileReviewRequested = (options: {
     readonly lastReviewedAtMs: number
     readonly prNumber: number
     readonly repo: string
+    readonly waitingForGreptileReviewSinceMs: number
   }) =>
     Effect.gen(function* () {
       const now = Date.now()
@@ -182,7 +184,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
           ...record,
           lastReviewedAtMs: options.lastReviewedAtMs,
           updatedAtMs: now,
-          waitingForGreptileReviewSinceMs: null,
+          waitingForGreptileReviewSinceMs: options.waitingForGreptileReviewSinceMs,
         })
         return updated
       })
@@ -193,7 +195,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return updated
     })
 
-  return PullRequestStore.of({ list, markGreptileCompleted, markReviewHandled, upsert })
+  return PullRequestStore.of({ list, markGreptileCompleted, markGreptileReviewRequested, upsert })
 })
 
 export const PullRequestStoreLayer = Layer.effect(PullRequestStore, PullRequestStoreLive)

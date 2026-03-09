@@ -113,6 +113,38 @@ describe("PullRequestStore", () => {
         expect(records[0]?.waitingForGreptileReviewSinceMs).toBeNull()
       }),
     ))
+
+  it.effect("records a handled Greptile review as waiting for the next pass", () =>
+    withTempCwd(() =>
+      Effect.gen(function* () {
+        yield* withStore((store) =>
+          store.upsert({
+            branch: "orca/eng-1-example-issue",
+            issueDescription: "Example issue description",
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            repo: "peterje/orca",
+            waitingForGreptileReviewSinceMs: 1_700_000_000_000,
+          }))
+
+        yield* withStore((store) =>
+          store.markGreptileReviewRequested({
+            lastReviewedAtMs: 1_700_000_000_100,
+            prNumber: 42,
+            repo: "peterje/orca",
+            waitingForGreptileReviewSinceMs: 1_700_000_000_200,
+          }))
+
+        const records = yield* withStore((store) => store.list)
+
+        expect(records).toHaveLength(1)
+        expect(records[0]?.lastReviewedAtMs).toBe(1_700_000_000_100)
+        expect(records[0]?.waitingForGreptileReviewSinceMs).toBe(1_700_000_000_200)
+      }),
+    ))
 })
 
 const withStore = <A, E>(use: (store: typeof PullRequestStore.Service) => Effect.Effect<A, E>) =>

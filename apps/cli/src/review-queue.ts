@@ -7,15 +7,17 @@ import type {
 } from "./github.ts"
 import type { OrcaManagedPullRequest } from "./pull-request-store.ts"
 
-export const reviewTriggerLabel = "orca-review"
+type PendingGreptileReviewScore = {
+  readonly maximum: number
+  readonly value: number
+}
 
 export type PendingPullRequestReview = {
   readonly feedback: PullRequestFeedback
   readonly feedbackMarkdown: string
   readonly latestFeedbackAtMs: number
   readonly pullRequest: OrcaManagedPullRequest
-  readonly trigger: "feedback" | "label" | "mention"
-  readonly triggerLabelPresent: boolean
+  readonly reviewScore: PendingGreptileReviewScore
 }
 
 export type GreptileReviewScore = {
@@ -32,28 +34,32 @@ export const findPendingPullRequestReview = (options: {
     return null
   }
 
-  const since = options.pullRequest.lastReviewedAtMs ?? 0
-  const triggerLabelPresent = options.feedback.labels.some((label) => label.toLowerCase() === reviewTriggerLabel)
-  const isRelevantFeedback = isRelevantEntry(options.feedback.authorLogin)
+  const since = Math.max(
+    options.pullRequest.lastReviewedAtMs ?? 0,
+    options.pullRequest.waitingForGreptileReviewSinceMs ?? 0,
+  )
+  const greptileReviews = options.feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review))
+  const latestGreptileReview = findLatestEntry(greptileReviews)
+  if (latestGreptileReview === null || latestGreptileReview.createdAtMs <= since) {
+    return null
+  }
+
+  const reviewScore = parsePendingGreptileReviewScore(latestGreptileReview.body)
+  if (reviewScore === null || reviewScore.value >= reviewScore.maximum) {
+    return null
+  }
+
   const unresolvedThreads = options.feedback.reviewThreads
-    .map((thread) => stripRelevantThreadComments(thread, options.feedback.authorLogin))
+    .map(stripGreptileThreadComments)
     .filter((thread): thread is PullRequestReviewThread => thread !== null)
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
   const recentUnresolvedThreads = unresolvedThreads.filter((thread) =>
     thread.comments.some((comment) => comment.createdAtMs > since))
   const recentComments = options.feedback.comments.filter(
-    (comment) => comment.createdAtMs > since && isRelevantFeedback(comment),
+    (comment) => comment.createdAtMs > since && isGreptileEntry(comment),
   )
-  const recentReviews = options.feedback.reviews.filter(
-    (review) => review.body.trim().length > 0 && review.createdAtMs > since && isRelevantFeedback(review),
-  )
-  const mentionTriggered = hasMentionTrigger({
-    comments: recentComments,
-    reviews: recentReviews,
-    threads: recentUnresolvedThreads,
-    since,
-  })
-  const feedbackPresent = (triggerLabelPresent ? unresolvedThreads : recentUnresolvedThreads).length > 0
+  const recentReviews = greptileReviews.filter((review) => review.createdAtMs > since)
+  const feedbackPresent = recentUnresolvedThreads.length > 0
     || recentComments.length > 0
     || recentReviews.length > 0
 
@@ -61,43 +67,29 @@ export const findPendingPullRequestReview = (options: {
     return null
   }
 
-  const trigger = triggerLabelPresent ? "label" : mentionTriggered ? "mention" : "feedback"
-
   const latestFeedbackAtMs = Math.max(
-    0,
+    latestGreptileReview.createdAtMs,
     ...recentComments.map((comment) => comment.createdAtMs),
     ...recentReviews.map((review) => review.createdAtMs),
-    ...unresolvedThreads.flatMap((thread) => thread.comments.map((comment) => comment.createdAtMs)),
+    ...recentUnresolvedThreads.flatMap((thread) => thread.comments.map((comment) => comment.createdAtMs)),
   )
 
   return {
     feedback: options.feedback,
-    feedbackMarkdown: renderReviewFeedbackMarkdown({
+    feedbackMarkdown: renderGreptileReviewMarkdown({
       comments: recentComments,
       reviews: recentReviews,
-      trigger,
-      triggerLabelPresent,
-      unresolvedThreads: triggerLabelPresent ? unresolvedThreads : recentUnresolvedThreads,
+      reviewScore,
+      unresolvedThreads: recentUnresolvedThreads,
     }),
     latestFeedbackAtMs,
     pullRequest: options.pullRequest,
-    trigger,
-    triggerLabelPresent,
+    reviewScore,
   }
 }
 
 export const findLatestGreptileReviewScore = (feedback: PullRequestFeedback): GreptileReviewScore | null => {
-  const latestReview = feedback.reviews.reduce<PullRequestReview | null>((latest, review) => {
-    if (!isGreptileReview(review)) {
-      return latest
-    }
-
-    if (latest === null || review.createdAtMs > latest.createdAtMs) {
-      return review
-    }
-
-    return latest
-  }, null)
+  const latestReview = findLatestEntry(feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review)))
 
   if (latestReview === null) {
     return null
@@ -119,25 +111,13 @@ export const hasLatestGreptileReviewScore = (feedback: PullRequestFeedback, achi
   return score !== null && score.achieved === achieved && score.total === total
 }
 
-const hasMentionTrigger = (options: {
-  readonly comments: ReadonlyArray<PullRequestComment>
-  readonly reviews: ReadonlyArray<PullRequestReview>
-  readonly since: number
-  readonly threads: ReadonlyArray<PullRequestReviewThread>
-}) =>
-  options.comments.some((comment) => containsOrcaMention(comment.body))
-  || options.reviews.some((review) => containsOrcaMention(review.body))
-  || options.threads.some((thread) =>
-    thread.comments.some((comment) => comment.createdAtMs > options.since && containsOrcaMention(comment.body)))
+const greptileAuthorPrefixes = ["greptile-apps", "greptile-apps-staging"]
 
-const containsOrcaMention = (body: string) => /(^|\W)@orca\b/i.test(body)
+const isGreptileEntry = (entry: { readonly authorLogin: string }) =>
+  greptileAuthorPrefixes.some((prefix) => entry.authorLogin.toLowerCase().startsWith(prefix))
 
-const isRelevantEntry = (authorLogin: string) =>
-  (entry: { readonly authorLogin: string; readonly body: string; readonly isBot: boolean }) =>
-    !entry.isBot && (entry.authorLogin !== authorLogin || containsOrcaMention(entry.body))
-
-const stripRelevantThreadComments = (thread: PullRequestReviewThread, authorLogin: string): PullRequestReviewThread | null => {
-  const comments = thread.comments.filter(isRelevantEntry(authorLogin))
+const stripGreptileThreadComments = (thread: PullRequestReviewThread): PullRequestReviewThread | null => {
+  const comments = thread.comments.filter(isGreptileEntry)
   if (comments.length === 0) {
     return null
   }
@@ -147,17 +127,16 @@ const stripRelevantThreadComments = (thread: PullRequestReviewThread, authorLogi
   }
 }
 
-const renderReviewFeedbackMarkdown = (options: {
+const renderGreptileReviewMarkdown = (options: {
   readonly comments: ReadonlyArray<PullRequestComment>
   readonly reviews: ReadonlyArray<PullRequestReview>
-  readonly trigger: PendingPullRequestReview["trigger"]
-  readonly triggerLabelPresent: boolean
+  readonly reviewScore: PendingGreptileReviewScore
   readonly unresolvedThreads: ReadonlyArray<PullRequestReviewThread>
 }) => {
   const sections = [
-    "# PR feedback",
+    "# Greptile review",
     "",
-    `Trigger: ${renderTrigger(options.trigger)}`,
+    `Confidence: ${options.reviewScore.value}/${options.reviewScore.maximum}`,
   ]
 
   if (options.unresolvedThreads.length > 0) {
@@ -178,21 +157,10 @@ const renderReviewFeedbackMarkdown = (options: {
   }
 
   if (sections.length === 3) {
-    sections.push("", "No review feedback found.")
+    sections.push("", "No Greptile feedback found.")
   }
 
   return sections.join("\n")
-}
-
-const renderTrigger = (trigger: PendingPullRequestReview["trigger"]) => {
-  switch (trigger) {
-    case "label":
-      return `label \`${reviewTriggerLabel}\``
-    case "mention":
-      return "recent `@orca` mention"
-    case "feedback":
-      return "recent reviewer feedback"
-  }
 }
 
 const renderReviewThread = (thread: PullRequestReviewThread) =>
@@ -227,21 +195,33 @@ const renderGeneralComment = (comment: PullRequestComment) => `  <comment author
     <body>${comment.body}</body>
   </comment>`
 
-const greptileReviewAuthorPrefixes = ["greptile-apps", "greptile-apps-staging"]
-const greptileConfidenceScorePattern = /\bconfidence\b[^\d]*(\d+)\s*\/\s*(\d+)/i
+const findLatestEntry = <A extends { readonly createdAtMs: number }>(entries: ReadonlyArray<A>): A | null => {
+  let latest: A | null = null
 
-const isGreptileReview = (review: PullRequestReview) =>
-  greptileReviewAuthorPrefixes.some((prefix) => review.authorLogin.toLowerCase().startsWith(prefix))
+  for (const entry of entries) {
+    if (latest === null || entry.createdAtMs > latest.createdAtMs) {
+      latest = entry
+    }
+  }
+
+  return latest
+}
+
+const parsePendingGreptileReviewScore = (body: string): PendingGreptileReviewScore | null => {
+  const score = parseGreptileScore(body)
+  return score === null ? null : { maximum: score.total, value: score.achieved }
+}
 
 const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "review"> | null => {
-  const match = body.match(greptileConfidenceScorePattern)
+  const match = body.match(/\b(?:confidence|score)\b[^\d]*(\d+)\s*\/\s*(\d+)\b/i)
   if (match === null) {
     return null
   }
 
   const achieved = Number(match[1])
   const total = Number(match[2])
-  if (!Number.isFinite(achieved) || !Number.isFinite(total)) {
+
+  if (!Number.isFinite(achieved) || !Number.isFinite(total) || total <= 0) {
     return null
   }
 
