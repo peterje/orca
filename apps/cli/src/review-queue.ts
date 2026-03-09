@@ -28,12 +28,13 @@ export const findPendingPullRequestReview = (options: {
 
   const since = options.pullRequest.lastReviewedAtMs ?? 0
   const triggerLabelPresent = options.feedback.labels.some((label) => label.toLowerCase() === reviewTriggerLabel)
-  const isRelevantFeedback = (entry: { readonly authorLogin: string; readonly body: string; readonly isBot: boolean }) =>
-    !entry.isBot && (entry.authorLogin !== options.feedback.authorLogin || containsOrcaMention(entry.body))
+  const isRelevantFeedback = isRelevantEntry(options.feedback.authorLogin)
   const unresolvedThreads = options.feedback.reviewThreads
     .map((thread) => stripRelevantThreadComments(thread, options.feedback.authorLogin))
     .filter((thread): thread is PullRequestReviewThread => thread !== null)
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
+  const recentUnresolvedThreads = unresolvedThreads.filter((thread) =>
+    thread.comments.some((comment) => comment.createdAtMs > since))
   const recentComments = options.feedback.comments.filter(
     (comment) => comment.createdAtMs > since && isRelevantFeedback(comment),
   )
@@ -43,10 +44,12 @@ export const findPendingPullRequestReview = (options: {
   const mentionTriggered = hasMentionTrigger({
     comments: recentComments,
     reviews: recentReviews,
-    threads: unresolvedThreads,
+    threads: recentUnresolvedThreads,
     since,
   })
-  const feedbackPresent = unresolvedThreads.length > 0 || recentComments.length > 0 || recentReviews.length > 0
+  const feedbackPresent = (triggerLabelPresent ? unresolvedThreads : recentUnresolvedThreads).length > 0
+    || recentComments.length > 0
+    || recentReviews.length > 0
 
   if (!feedbackPresent) {
     return null
@@ -90,10 +93,12 @@ const hasMentionTrigger = (options: {
 
 const containsOrcaMention = (body: string) => /(^|\W)@orca\b/i.test(body)
 
+const isRelevantEntry = (authorLogin: string) =>
+  (entry: { readonly authorLogin: string; readonly body: string; readonly isBot: boolean }) =>
+    !entry.isBot && (entry.authorLogin !== authorLogin || containsOrcaMention(entry.body))
+
 const stripRelevantThreadComments = (thread: PullRequestReviewThread, authorLogin: string): PullRequestReviewThread | null => {
-  const comments = thread.comments.filter(
-    (comment) => !comment.isBot && (comment.authorLogin !== authorLogin || containsOrcaMention(comment.body)),
-  )
+  const comments = thread.comments.filter(isRelevantEntry(authorLogin))
   if (comments.length === 0) {
     return null
   }

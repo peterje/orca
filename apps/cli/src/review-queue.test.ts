@@ -111,6 +111,24 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).toContain("@orca can you take another look?")
   })
 
+  it("ignores unresolved reviewer threads that predate the last review", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 10 })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 50 }),
+    })
+
+    expect(pending).toBeNull()
+  })
+
   it("selects recent @orca mentions from general comments", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
