@@ -43,6 +43,52 @@ describe("Linear", () => {
       expect(error.message).toContain("Invalid scope")
       expect(error.message).toContain("orca linear auth")
     }).pipe(Effect.provide(makeLinearTestLayer(makeGraphqlClient({ mode: "missing-scope" })))))
+
+  it.effect("prefers the in progress workflow state over in review", () => {
+    const issueUpdates: Array<Record<string, unknown>> = []
+
+    return Effect.gen(function* () {
+      const linear = yield* Linear
+      const issues = yield* linear.issues
+
+      yield* linear.markIssueInProgress(issues.find((issue) => issue.identifier === "ENG-1")!)
+
+      expect(issueUpdates).toEqual([
+        {
+          id: "direct-1",
+          stateId: "state-progress",
+        },
+      ])
+    }).pipe(
+      Effect.provide(
+        makeLinearTestLayer(
+          makeGraphqlClient({
+            issueNodeOverrides: {
+              team: {
+                states: {
+                  nodes: [
+                    {
+                      id: "state-review",
+                      name: "In Review",
+                      type: "started",
+                    },
+                    {
+                      id: "state-progress",
+                      name: "In Progress",
+                      type: "started",
+                    },
+                  ],
+                },
+              },
+            },
+            onIssueUpdate: (variables) => {
+              issueUpdates.push(variables)
+            },
+          }),
+        ),
+      ),
+    )
+  })
 })
 
 const makeLinearTestLayer = (httpClientLayer: Layer.Layer<HttpClient.HttpClient>) =>
@@ -60,7 +106,11 @@ const makeLinearTestLayer = (httpClientLayer: Layer.Layer<HttpClient.HttpClient>
     ]),
   )
 
-const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" | "missing-scope" }) =>
+const makeGraphqlClient = (options?: {
+  readonly issueNodeOverrides?: Partial<GraphqlIssueNode> | undefined
+  readonly mode?: "success" | "error" | "missing-scope"
+  readonly onIssueUpdate?: ((variables: Record<string, unknown>) => void) | undefined
+}) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request, _url) => {
@@ -73,6 +123,20 @@ const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" | "mi
 
       if (options?.mode === "missing-scope" && query.includes("mutation OrcaIssueUpdate")) {
         return Effect.succeed(jsonResponse(request, { errors: [{ message: "Invalid scope: `write` required" }] }, 400))
+      }
+
+      if (query.includes("mutation OrcaIssueUpdate")) {
+        options?.onIssueUpdate?.((body.variables ?? {}) as Record<string, unknown>)
+        return Effect.succeed(
+          jsonResponse(request, {
+            data: {
+              issueUpdate: {
+                success: true,
+              },
+            },
+            errors: [],
+          }),
+        )
       }
 
       if (query.includes("query Viewer")) {
@@ -117,6 +181,7 @@ const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" | "mi
                     labels: { nodes: [{ id: "label-1", name: "oRcA" }] },
                     priority: 2,
                     title: "Direct Orca issue",
+                    ...options?.issueNodeOverrides,
                   }),
                   linearNode({
                     createdAt: "2026-03-03T00:00:00.000Z",
