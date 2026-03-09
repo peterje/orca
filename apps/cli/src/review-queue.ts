@@ -5,7 +5,7 @@ import type {
   PullRequestReviewComment,
   PullRequestReviewThread,
 } from "./github.ts"
-import type { OrcaManagedPullRequest } from "./pull-request-store.ts"
+import type { OrcaManagedPullRequest, PullRequestTerminalState } from "./pull-request-store.ts"
 
 type GreptileReviewScore = {
   readonly maximum: number
@@ -24,6 +24,10 @@ export const findPendingPullRequestReview = (options: {
   readonly feedback: PullRequestFeedback
   readonly pullRequest: OrcaManagedPullRequest
 }): PendingPullRequestReview | null => {
+  if (options.pullRequest.terminalState !== null) {
+    return null
+  }
+
   if (options.feedback.state.toUpperCase() !== "OPEN") {
     return null
   }
@@ -32,7 +36,7 @@ export const findPendingPullRequestReview = (options: {
     options.pullRequest.lastReviewedAtMs ?? 0,
     options.pullRequest.waitingForGreptileReviewSinceMs ?? 0,
   )
-  const greptileReviews = options.feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review))
+  const greptileReviews = findGreptileReviews(options.feedback)
   const latestGreptileReview = findLatestEntry(greptileReviews)
   if (latestGreptileReview === null || latestGreptileReview.createdAtMs <= since) {
     return null
@@ -82,10 +86,42 @@ export const findPendingPullRequestReview = (options: {
   }
 }
 
+export const findPullRequestTerminalState = (feedback: PullRequestFeedback): {
+  readonly lastReviewedAtMs: number | null
+  readonly terminalState: PullRequestTerminalState
+} | null => {
+  switch (feedback.state.toUpperCase()) {
+    case "MERGED":
+      return { lastReviewedAtMs: findLatestGreptileReviewAtMs(feedback), terminalState: "merged" }
+    case "CLOSED":
+      return { lastReviewedAtMs: findLatestGreptileReviewAtMs(feedback), terminalState: "closed" }
+  }
+
+  const latestGreptileReview = findLatestEntry(findGreptileReviews(feedback))
+  if (latestGreptileReview === null) {
+    return null
+  }
+
+  const reviewScore = parseGreptileReviewScore(latestGreptileReview.body)
+  if (reviewScore === null || reviewScore.value < reviewScore.maximum) {
+    return null
+  }
+
+  return {
+    lastReviewedAtMs: latestGreptileReview.createdAtMs,
+    terminalState: "greptile-approved",
+  }
+}
+
 const greptileAuthorPrefixes = ["greptile-apps", "greptile-apps-staging"]
 
 const isGreptileEntry = (entry: { readonly authorLogin: string }) =>
   greptileAuthorPrefixes.some((prefix) => entry.authorLogin.toLowerCase().startsWith(prefix))
+
+const findGreptileReviews = (feedback: PullRequestFeedback) =>
+  feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review))
+
+const findLatestGreptileReviewAtMs = (feedback: PullRequestFeedback) => findLatestEntry(findGreptileReviews(feedback))?.createdAtMs ?? null
 
 const stripGreptileThreadComments = (thread: PullRequestReviewThread): PullRequestReviewThread | null => {
   const comments = thread.comments.filter(isGreptileEntry)

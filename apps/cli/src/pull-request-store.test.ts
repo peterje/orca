@@ -70,6 +70,7 @@ describe("PullRequestStore", () => {
               prNumber: 42,
               prUrl: "https://github.com/peterje/orca/pull/42",
               repo: "peterje/orca",
+              terminalState: null,
               updatedAtMs: 2,
             },
           ], null, 2),
@@ -111,6 +112,41 @@ describe("PullRequestStore", () => {
         expect(records).toHaveLength(1)
         expect(records[0]?.lastReviewedAtMs).toBe(1_700_000_000_100)
         expect(records[0]?.waitingForGreptileReviewSinceMs).toBe(1_700_000_000_200)
+      }),
+    ))
+
+  it.effect("persists terminal pull request state across restarts", () =>
+    withTempCwd(() =>
+      Effect.gen(function* () {
+        yield* withStore((store) =>
+          store.upsert({
+            branch: "orca/eng-1-example-issue",
+            issueDescription: "Example issue description",
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            repo: "peterje/orca",
+            waitingForGreptileReviewSinceMs: 1_700_000_000_000,
+          }))
+
+        yield* withStore((store) =>
+          store.markTerminal({
+            lastReviewedAtMs: 1_700_000_000_100,
+            prNumber: 42,
+            repo: "peterje/orca",
+            terminalState: "greptile-approved",
+          }))
+
+        const reloaded = yield* withStore((store) => store.list)
+
+        expect(reloaded).toHaveLength(1)
+        expect(reloaded[0]).toMatchObject({
+          lastReviewedAtMs: 1_700_000_000_100,
+          terminalState: "greptile-approved",
+          waitingForGreptileReviewSinceMs: null,
+        })
       }),
     ))
 })

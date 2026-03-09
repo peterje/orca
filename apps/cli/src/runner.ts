@@ -8,6 +8,7 @@ import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } 
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
 import { findPendingPullRequestReview, type PendingPullRequestReview } from "./review-queue.ts"
 import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
+import { reconcileTrackedPullRequests } from "./tracked-pull-requests.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
 import { Worktree, WorktreeError, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
 
@@ -77,18 +78,13 @@ export const RunnerLive = Effect.gen(function* () {
     const config = yield* repoConfig.read
     const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
     const trackedIssueIds = new Set(storedPullRequests.map((pullRequest) => pullRequest.issueId))
-    const reviewCandidates = yield* Effect.forEach(
-      storedPullRequests,
-      (pullRequest) =>
-        github.readPullRequestFeedback({
-          pullRequestNumber: pullRequest.prNumber,
-          repo: pullRequest.repo,
-        }).pipe(
-          Effect.map((feedback) => findPendingPullRequestReview({ feedback, pullRequest })),
-          Effect.mapError(toRunnerFailure),
-        ),
-      { concurrency: 1 },
-    )
+    const activePullRequests = yield* reconcileTrackedPullRequests({
+      github,
+      mapError: toRunnerFailure,
+      pullRequestStore,
+      pullRequests: storedPullRequests,
+    })
+    const reviewCandidates = activePullRequests.map(({ feedback, pullRequest }) => findPendingPullRequestReview({ feedback, pullRequest }))
 
     const review = reviewCandidates
       .filter((candidate): candidate is PendingPullRequestReview => candidate !== null)
@@ -105,7 +101,7 @@ export const RunnerLive = Effect.gen(function* () {
       return Option.none<SelectedWork>()
     }
 
-    if (countWaitingPullRequests(storedPullRequests) >= config.maxWaitingPullRequests) {
+    if (countWaitingPullRequests(activePullRequests.map(({ pullRequest }) => pullRequest)) >= config.maxWaitingPullRequests) {
       return Option.none<SelectedWork>()
     }
 
@@ -281,6 +277,11 @@ const runImplementation = (options: {
       let waitingForGreptileReviewSinceMs: number | undefined = undefined
 
       if (finalizedPullRequest.wasCreated) {
+        yield* options.github.markPullRequestReadyForReview({
+          isDraft: finalizedPullRequest.pullRequest.isDraft,
+          pullRequestNumber: finalizedPullRequest.pullRequest.number,
+          repo: options.config.repo,
+        }).pipe(Effect.mapError(toRunnerFailure))
         yield* options.github.requestPullRequestReview({
           pullRequestNumber: finalizedPullRequest.pullRequest.number,
           repo: options.config.repo,
@@ -431,6 +432,12 @@ const runReview = (options: {
         issueIdentifier: options.review.pullRequest.issueIdentifier,
         issueTitle: options.review.pullRequest.issueTitle,
         worktree: managedWorktree,
+      }).pipe(Effect.mapError(toRunnerFailure))
+
+      yield* options.github.markPullRequestReadyForReview({
+        isDraft: finalizedPullRequest.pullRequest.isDraft,
+        pullRequestNumber: options.review.pullRequest.prNumber,
+        repo: options.review.pullRequest.repo,
       }).pipe(Effect.mapError(toRunnerFailure))
 
       yield* options.github.requestPullRequestReview({

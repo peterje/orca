@@ -37,6 +37,7 @@ describe("Runner", () => {
       readonly repo: string
       readonly title: string
     }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
     const requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
     const storedPullRequests: Array<{
       readonly branch: string
@@ -84,6 +85,7 @@ describe("Runner", () => {
             title: "feat: example issue",
           },
         ])
+        expect(readyForReviewRequests).toEqual([{ isDraft: true, pullRequestNumber: 42, repo: "peterje/orca" }])
         expect(requestedReviews).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
         expect(storedPullRequests).toHaveLength(1)
         expect(storedPullRequests[0]).toMatchObject({
@@ -93,7 +95,7 @@ describe("Runner", () => {
         })
         expect(typeof storedPullRequests[0]?.waitingForGreptileReviewSinceMs).toBe("number")
         expect(readFileSync(join(worktreeDirectory, ".orca/issue.md"), "utf8")).toContain("Identifier: ENG-1")
-      }).pipe(Effect.provide(makeRunnerLayer({ createdPullRequests, requestedReviews, storedPullRequests, worktreeDirectory })))
+      }).pipe(Effect.provide(makeRunnerLayer({ createdPullRequests, readyForReviewRequests, requestedReviews, storedPullRequests, worktreeDirectory })))
     })
   })
 
@@ -256,6 +258,123 @@ describe("Runner", () => {
       }))),
     ))
 
+  it.effect("stops tracking externally merged pull requests without rescheduling their issues", () => {
+    const markedTerminalPullRequests: Array<{
+      readonly lastReviewedAtMs?: number | null | undefined
+      readonly prNumber: number
+      readonly repo: string
+      readonly terminalState: "closed" | "greptile-approved" | "merged"
+    }> = []
+    const pullRequestFeedbackRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        expect(yield* runner.peekNext).toEqual(Option.none())
+        expect(markedTerminalPullRequests).toEqual([
+          {
+            lastReviewedAtMs: null,
+            prNumber: 42,
+            repo: "peterje/orca",
+            terminalState: "merged",
+          },
+        ])
+        expect(pullRequestFeedbackRequests).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+
+        pullRequestFeedbackRequests.length = 0
+
+        expect(yield* runner.peekNext).toEqual(Option.none())
+        expect(pullRequestFeedbackRequests).toEqual([])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Existing work" })],
+        markedTerminalPullRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            number: 42,
+            state: "MERGED",
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        pullRequestFeedbackRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))))
+  })
+
+  it.effect("keeps Greptile-approved pull requests out of later polls", () => {
+    const markedTerminalPullRequests: Array<{
+      readonly lastReviewedAtMs?: number | null | undefined
+      readonly prNumber: number
+      readonly repo: string
+      readonly terminalState: "closed" | "greptile-approved" | "merged"
+    }> = []
+    const pullRequestFeedbackRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        expect(Option.getOrNull(yield* runner.peekNext)).toMatchObject({
+          id: "issue-2",
+          issueIdentifier: "ENG-2",
+          kind: "implementation",
+        })
+        expect(markedTerminalPullRequests).toEqual([
+          {
+            lastReviewedAtMs: 70,
+            prNumber: 42,
+            repo: "peterje/orca",
+            terminalState: "greptile-approved",
+          },
+        ])
+        expect(pullRequestFeedbackRequests).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+
+        pullRequestFeedbackRequests.length = 0
+
+        expect(Option.getOrNull(yield* runner.peekNext)).toMatchObject({
+          id: "issue-2",
+          issueIdentifier: "ENG-2",
+          kind: "implementation",
+        })
+        expect(pullRequestFeedbackRequests).toEqual([])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [
+          issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Existing work" }),
+          issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "Next work" }),
+        ],
+        markedTerminalPullRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            number: 42,
+            reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 70, isBot: true })],
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        pullRequestFeedbackRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))))
+  })
+
   it.effect("requeues Greptile after fixing a failing review", () => {
     const createdPullRequests: Array<{
       readonly baseBranch: string
@@ -271,6 +390,7 @@ describe("Runner", () => {
       readonly repo: string
       readonly waitingForGreptileReviewSinceMs: number
     }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
     const requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
     const reviewPromptRequests: Array<{
       readonly baseBranch: string
@@ -297,6 +417,7 @@ describe("Runner", () => {
           pullRequestUrl: "https://github.com/peterje/orca/pull/42",
         })
         expect(createdPullRequests).toEqual([])
+        expect(readyForReviewRequests).toEqual([{ isDraft: true, pullRequestNumber: 42, repo: "peterje/orca" }])
         expect(requestedReviews).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
         expect(recordedGreptileReviewRequests).toHaveLength(1)
         expect(recordedGreptileReviewRequests[0]).toMatchObject({
@@ -336,6 +457,7 @@ describe("Runner", () => {
           }),
         },
         recordedGreptileReviewRequests,
+        readyForReviewRequests,
         requestedReviews,
         reviewPromptRequests,
         trackedPullRequests: [
@@ -354,6 +476,7 @@ describe("Runner", () => {
   })
 
   it.effect("records the waiting timestamp after the Greptile review request completes", () => {
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
     const requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
     const recordedGreptileReviewRequests: Array<{
       readonly lastReviewedAtMs: number
@@ -375,6 +498,7 @@ describe("Runner", () => {
         yield* runner.runNext
 
         expect(requestedReviews).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(readyForReviewRequests).toEqual([{ isDraft: true, pullRequestNumber: 42, repo: "peterje/orca" }])
         expect(recordedGreptileReviewRequests).toHaveLength(1)
         expect(recordedGreptileReviewRequests[0]?.waitingForGreptileReviewSinceMs).toBe(200)
       }).pipe(
@@ -400,6 +524,7 @@ describe("Runner", () => {
             }),
           },
           recordedGreptileReviewRequests,
+          readyForReviewRequests,
           requestedReviews,
           requestPullRequestReview: (request) =>
             Effect.sync(() => {
@@ -450,13 +575,26 @@ const makeRunnerLayer = (options: {
   }>
   readonly currentPullRequest?: PullRequestInfo | null | undefined
   readonly issues?: ReadonlyArray<LinearIssue>
+  readonly markedTerminalPullRequests?: Array<{
+    readonly lastReviewedAtMs?: number | null | undefined
+    readonly prNumber: number
+    readonly repo: string
+    readonly terminalState: "closed" | "greptile-approved" | "merged"
+  }>
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
+  readonly pullRequestFeedbackRequests?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
+  readonly readyForReviewRequests?: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }>
   readonly recordedGreptileReviewRequests?: Array<{
     readonly lastReviewedAtMs: number
     readonly prNumber: number
     readonly repo: string
     readonly waitingForGreptileReviewSinceMs: number
   }>
+  readonly markPullRequestReadyForReview?: (request: {
+    readonly isDraft: boolean
+    readonly pullRequestNumber: number
+    readonly repo: string
+  }) => Effect.Effect<void>
   readonly requestPullRequestReview?: (request: {
     readonly pullRequestNumber: number
     readonly repo: string
@@ -491,11 +629,14 @@ const makeRunnerLayer = (options: {
 }) => {
   const worktree = makeManagedWorktree(options.worktreeDirectory)
   const createdPullRequests = options.createdPullRequests ?? []
+  const markedTerminalPullRequests = options.markedTerminalPullRequests ?? []
+  const pullRequestFeedbackRequests = options.pullRequestFeedbackRequests ?? []
+  const readyForReviewRequests = options.readyForReviewRequests ?? []
   const recordedGreptileReviewRequests = options.recordedGreptileReviewRequests ?? []
   const reviewPromptRequests = options.reviewPromptRequests ?? []
   const requestedReviews = options.requestedReviews ?? []
   const storedPullRequests = options.storedPullRequests ?? []
-  const trackedPullRequests = options.trackedPullRequests ?? []
+  let trackedPullRequests = [...(options.trackedPullRequests ?? [])]
   let activeRun: ActiveRun | null = null
 
   return RunnerLayer.pipe(
@@ -523,13 +664,21 @@ const makeRunnerLayer = (options: {
               }),
             detectRepo: Effect.die("not used in this test"),
             readPullRequestFeedback: (request) =>
-              Effect.succeed(
-                options.pullRequestFeedbackByKey?.[makePullRequestKey(request)]
-                ?? pullRequestFeedback({
-                  number: request.pullRequestNumber,
-                  url: `https://github.com/${request.repo}/pull/${request.pullRequestNumber}`,
-                }),
-              ),
+              Effect.sync(() => {
+                pullRequestFeedbackRequests.push(request)
+                return options.pullRequestFeedbackByKey?.[makePullRequestKey(request)]
+                  ?? pullRequestFeedback({
+                    number: request.pullRequestNumber,
+                    url: `https://github.com/${request.repo}/pull/${request.pullRequestNumber}`,
+                  })
+              }),
+            markPullRequestReadyForReview: options.markPullRequestReadyForReview
+              ?? ((request) =>
+                Effect.sync(() => {
+                  if (request.isDraft) {
+                    readyForReviewRequests.push(request)
+                  }
+                })),
             removePullRequestLabel: () => Effect.die("not used in this test"),
             requestPullRequestReview: options.requestPullRequestReview
               ?? ((request) =>
@@ -577,24 +726,49 @@ const makeRunnerLayer = (options: {
         Layer.succeed(
           PullRequestStore,
           PullRequestStore.of({
-            list: Effect.succeed(trackedPullRequests),
+            list: Effect.sync(() => trackedPullRequests),
             markGreptileReviewRequested: (request) =>
               Effect.sync(() => {
                 recordedGreptileReviewRequests.push(request)
                 const existing = trackedPullRequests.find((candidate) => candidate.repo === request.repo && candidate.prNumber === request.prNumber)
-                return existing === undefined
-                  ? null
-                  : new OrcaManagedPullRequest({
+                if (existing === undefined) {
+                  return null
+                }
+
+                const updated = new OrcaManagedPullRequest({
                       ...existing,
                       lastReviewedAtMs: request.lastReviewedAtMs,
+                      terminalState: existing.terminalState,
                       updatedAtMs: 1,
                       waitingForGreptileReviewSinceMs: request.waitingForGreptileReviewSinceMs,
                     })
+                trackedPullRequests = trackedPullRequests.map((candidate) =>
+                  candidate.repo === request.repo && candidate.prNumber === request.prNumber ? updated : candidate)
+                return updated
+              }),
+            markTerminal: (request) =>
+              Effect.sync(() => {
+                markedTerminalPullRequests.push(request)
+                const existing = trackedPullRequests.find((candidate) => candidate.repo === request.repo && candidate.prNumber === request.prNumber)
+                if (existing === undefined) {
+                  return null
+                }
+
+                const updated = new OrcaManagedPullRequest({
+                  ...existing,
+                  lastReviewedAtMs: request.lastReviewedAtMs === undefined ? existing.lastReviewedAtMs : request.lastReviewedAtMs,
+                  terminalState: request.terminalState,
+                  updatedAtMs: 1,
+                  waitingForGreptileReviewSinceMs: null,
+                })
+                trackedPullRequests = trackedPullRequests.map((candidate) =>
+                  candidate.repo === request.repo && candidate.prNumber === request.prNumber ? updated : candidate)
+                return updated
               }),
             upsert: (record) =>
               Effect.sync(() => {
                 storedPullRequests.push(record)
-                return new OrcaManagedPullRequest({
+                const next = new OrcaManagedPullRequest({
                   branch: record.branch,
                   createdAtMs: 1,
                   issueDescription: record.issueDescription,
@@ -605,9 +779,12 @@ const makeRunnerLayer = (options: {
                   prNumber: record.prNumber,
                   prUrl: record.prUrl,
                   repo: record.repo,
+                  terminalState: null,
                   updatedAtMs: 1,
                   waitingForGreptileReviewSinceMs: record.waitingForGreptileReviewSinceMs ?? null,
                 })
+                trackedPullRequests = [...trackedPullRequests.filter((candidate) => !(candidate.repo === record.repo && candidate.prNumber === record.prNumber)), next]
+                return next
               }),
           }),
         ),
@@ -697,6 +874,7 @@ const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Typ
     prNumber: overrides.prNumber,
     prUrl: overrides.prUrl,
     repo: overrides.repo ?? "peterje/orca",
+    terminalState: overrides.terminalState ?? null,
     updatedAtMs: overrides.updatedAtMs ?? 1,
     waitingForGreptileReviewSinceMs: overrides.waitingForGreptileReviewSinceMs ?? null,
   })

@@ -92,6 +92,7 @@ describe("review queue", () => {
 
 const pullRequest = (overrides?: Partial<{
   readonly lastReviewedAtMs: number | null
+  readonly terminalState: "closed" | "greptile-approved" | "merged" | null
   readonly waitingForGreptileReviewSinceMs: number | null
 }>) => ({
   branch: "orca/eng-1",
@@ -104,6 +105,7 @@ const pullRequest = (overrides?: Partial<{
   prNumber: 1,
   prUrl: "https://github.com/peterje/orca/pull/1",
   repo: "peterje/orca",
+  terminalState: overrides?.terminalState ?? null,
   updatedAtMs: 1,
   waitingForGreptileReviewSinceMs: overrides?.waitingForGreptileReviewSinceMs ?? null,
 })

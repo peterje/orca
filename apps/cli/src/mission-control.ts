@@ -7,6 +7,7 @@ import { PullRequestStore, PullRequestStoreError } from "./pull-request-store.ts
 import { RepoConfig, RepoConfigError } from "./repo-config.ts"
 import { findPendingPullRequestReview, type PendingPullRequestReview } from "./review-queue.ts"
 import { RunState, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
+import { reconcileTrackedPullRequests } from "./tracked-pull-requests.ts"
 
 export type MissionControlSnapshot = {
   readonly current:
@@ -52,18 +53,13 @@ export const MissionControlLive = Effect.gen(function* () {
     const trackedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toMissionControlError))
     const currentIssueId = activeRun?.issueId ?? null
     const visiblePullRequests = trackedPullRequests.filter((pullRequest) => pullRequest.issueId !== currentIssueId)
-    const pendingReviews = yield* Effect.forEach(
-      visiblePullRequests,
-      (pullRequest) =>
-        github.readPullRequestFeedback({
-          pullRequestNumber: pullRequest.prNumber,
-          repo: pullRequest.repo,
-        }).pipe(
-          Effect.map((feedback) => findPendingPullRequestReview({ feedback, pullRequest })),
-          Effect.mapError(toMissionControlError),
-        ),
-      { concurrency: 1 },
-    ).pipe(
+    const activePullRequests = yield* reconcileTrackedPullRequests({
+      github,
+      mapError: toMissionControlError,
+      pullRequestStore,
+      pullRequests: visiblePullRequests,
+    })
+    const pendingReviews = yield* Effect.succeed(activePullRequests.map(({ feedback, pullRequest }) => findPendingPullRequestReview({ feedback, pullRequest }))).pipe(
       Effect.map((reviews) =>
         reviews
           .filter((review): review is PendingPullRequestReview => review !== null)
@@ -74,7 +70,7 @@ export const MissionControlLive = Effect.gen(function* () {
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
     const actionableIssues = plan.actionable.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))
     const blockedIssues = plan.blocked.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))
-    const waitingForReviewCount = visiblePullRequests.filter((pullRequest) => pullRequest.waitingForGreptileReviewSinceMs !== null).length
+    const waitingForReviewCount = activePullRequests.filter(({ pullRequest }) => pullRequest.waitingForGreptileReviewSinceMs !== null).length
 
     const next = pendingReviews[0]
       ? {
