@@ -17,6 +17,7 @@ describe("Linear", () => {
         identifier: "ENG-1",
         isOrcaTagged: true,
         parentId: null,
+        url: "https://linear.app/orca/issue/ENG-1/direct-orca-issue",
       })
       expect(issues[1]).toMatchObject({
         identifier: "ENG-2",
@@ -117,6 +118,7 @@ const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" | "mi
                     labels: { nodes: [{ id: "label-1", name: "oRcA" }] },
                     priority: 2,
                     title: "Direct Orca issue",
+                    url: "https://linear.app/orca/issue/ENG-1/direct-orca-issue",
                   }),
                   linearNode({
                     createdAt: "2026-03-03T00:00:00.000Z",
@@ -125,6 +127,7 @@ const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" | "mi
                     labels: { nodes: [] },
                     priority: 4,
                     title: "Unrelated issue",
+                    url: "https://linear.app/orca/issue/ENG-3/unrelated-issue",
                   }),
                 ],
                 pageInfo: {
@@ -154,6 +157,7 @@ const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" | "mi
                   },
                   priority: 3,
                   title: "Open child",
+                  url: "https://linear.app/orca/issue/ENG-2/open-child",
                 }),
               ],
               pageInfo: {
@@ -249,6 +253,7 @@ const baseLinearNode = () => ({
     },
   },
   title: "Issue",
+  url: "https://linear.app/orca/issue/ENG-0/issue",
 })
 
 const tokens = (accessToken: string, expiresAtMs: number) =>

@@ -224,4 +224,5 @@ const issue = (
   state: overrides.state ?? "unstarted",
   teamStates: overrides.teamStates ?? [],
   title: overrides.title,
+  url: overrides.url ?? `https://linear.app/orca/issue/${overrides.identifier}/${overrides.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "issue"}`,
 })

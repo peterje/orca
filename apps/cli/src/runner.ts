@@ -1,4 +1,4 @@
-import { Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
+import { Console, Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
 import { AgentRunner, AgentRunnerError, AgentRunnerStalledError, AgentRunnerTimeoutError } from "./agent-runner.ts"
 import { GitHub, GitHubError, type GitHubService, type PullRequestInfo } from "./github.ts"
 import { planIssues, type IssuePlan, type PlannedIssue } from "./issue-planner.ts"
@@ -131,6 +131,11 @@ export const RunnerLive = Effect.gen(function* () {
       )
     }
 
+    yield* announceSelectedIssue({
+      linear,
+      selected: selected.value,
+    }).pipe(Effect.mapError(toRunnerFailure))
+
     return yield* (selected.value.kind === "review"
       ? runReview({
           agentRunner,
@@ -251,6 +256,7 @@ const runImplementation = (options: {
         issueId: options.issue.id,
         issueIdentifier: options.issue.identifier,
         issueTitle: options.issue.title,
+        issueUrl: options.issue.url,
         prNumber: pullRequest.number,
         prUrl: pullRequest.url,
         repo: options.config.repo,
@@ -407,6 +413,46 @@ const writePromptFile = (fs: FileSystem.FileSystem, worktreeDirectory: string, c
     const promptDirectory = `${worktreeDirectory}/.orca`
     yield* fs.makeDirectory(promptDirectory, { recursive: true }).pipe(Effect.mapError(toRunnerFailure))
     yield* fs.writeFileString(`${promptDirectory}/issue.md`, contents).pipe(Effect.mapError(toRunnerFailure))
+  })
+
+const announceSelectedIssue = (options: {
+  readonly linear: LinearService
+  readonly selected: SelectedWork
+}) =>
+  Effect.gen(function* () {
+    const issueIdentifier = options.selected.kind === "review"
+      ? options.selected.review.pullRequest.issueIdentifier
+      : options.selected.issue.identifier
+    const issueTitle = options.selected.kind === "review"
+      ? options.selected.review.pullRequest.issueTitle
+      : options.selected.issue.title
+    const issueUrl = yield* resolveSelectedIssueUrl(options)
+
+    yield* Console.log(`${options.selected.kind === "review" ? "Reviewing" : "Tackling"} ${issueIdentifier} ${issueTitle}`)
+    yield* Console.log(issueUrl)
+  })
+
+const resolveSelectedIssueUrl = (options: {
+  readonly linear: LinearService
+  readonly selected: SelectedWork
+}) =>
+  Effect.gen(function* () {
+    if (options.selected.kind !== "review") {
+      return options.selected.issue.url
+    }
+
+    if (options.selected.review.pullRequest.issueUrl) {
+      return options.selected.review.pullRequest.issueUrl
+    }
+
+    const issueUrl = yield* options.linear.issueUrl(options.selected.review.pullRequest.issueId)
+    if (issueUrl !== null) {
+      return issueUrl
+    }
+
+    return yield* Effect.fail(
+      new RunnerFailure({ message: `Failed to resolve a Linear URL for ${options.selected.review.pullRequest.issueIdentifier}.` }),
+    )
   })
 
 const finalizeGitAndPullRequest = (options: {

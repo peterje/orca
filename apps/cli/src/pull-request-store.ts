@@ -8,6 +8,7 @@ export class OrcaManagedPullRequest extends Schema.Class<OrcaManagedPullRequest>
   issueId: Schema.String,
   issueIdentifier: Schema.String,
   issueTitle: Schema.String,
+  issueUrl: Schema.optional(Schema.String),
   lastReviewedAtMs: Schema.NullOr(Schema.Number),
   prNumber: Schema.Number,
   prUrl: Schema.String,
@@ -30,6 +31,7 @@ export type PullRequestStoreService = {
     readonly issueId: string
     readonly issueIdentifier: string
     readonly issueTitle: string
+    readonly issueUrl?: string | undefined
     readonly prNumber: number
     readonly prUrl: string
     readonly repo: string
@@ -85,6 +87,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
     readonly issueId: string
     readonly issueIdentifier: string
     readonly issueTitle: string
+    readonly issueUrl?: string | undefined
     readonly prNumber: number
     readonly prUrl: string
     readonly repo: string
@@ -100,6 +103,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
         issueId: record.issueId,
         issueIdentifier: record.issueIdentifier,
         issueTitle: record.issueTitle,
+        issueUrl: record.issueUrl ?? existing?.issueUrl,
         lastReviewedAtMs: existing?.lastReviewedAtMs ?? null,
         prNumber: record.prNumber,
         prUrl: record.prUrl,

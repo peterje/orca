@@ -23,6 +23,7 @@ export type LinearIssue = {
   readonly state: string
   readonly teamStates: ReadonlyArray<LinearWorkflowState>
   readonly title: string
+  readonly url: string
 }
 
 export type LinearWorkflowState = {
@@ -37,6 +38,7 @@ export type LinearService = {
     readonly body: string
     readonly issueId: string
   }) => Effect.Effect<void, LinearApiError | LinearAuthRequiredError>
+  issueUrl: (issueId: string) => Effect.Effect<string | null, LinearApiError | LinearAuthRequiredError>
   issues: Effect.Effect<ReadonlyArray<LinearIssue>, LinearApiError | LinearAuthRequiredError>
   markIssueInProgress: (issue: LinearIssue) => Effect.Effect<void, LinearApiError | LinearAuthRequiredError>
   viewer: Effect.Effect<LinearViewer, LinearApiError | LinearAuthRequiredError>
@@ -157,6 +159,9 @@ export const LinearLive = Layer.effect(
       return mapLinearIssues(collected).sort(compareLinearIssues)
     })
 
+    const issueUrl = (issueId: string) =>
+      gql(IssueUrlData, issueUrlQuery, { id: issueId }).pipe(Effect.map((data) => data.issue?.url ?? null))
+
     const commentOnIssue = (options: {
       readonly body: string
       readonly issueId: string
@@ -181,7 +186,7 @@ export const LinearLive = Layer.effect(
       }).pipe(Effect.asVoid)
     }
 
-    return Linear.of({ authenticate, commentOnIssue, issues, markIssueInProgress, viewer })
+    return Linear.of({ authenticate, commentOnIssue, issueUrl, issues, markIssueInProgress, viewer })
   }),
 )
 
@@ -261,6 +266,7 @@ const LinearIssueNode = Schema.Struct({
     states: TeamStates,
   }),
   title: Schema.String,
+  url: Schema.String,
 })
 
 const CommentCreatePayload = Schema.Struct({
@@ -283,6 +289,12 @@ const IssuesPageData = Schema.Struct({
       hasNextPage: Schema.Boolean,
     }),
   }),
+})
+
+const IssueUrlData = Schema.Struct({
+  issue: Schema.NullOr(Schema.Struct({
+    url: Schema.String,
+  })),
 })
 
 const GraphqlEnvelope = Schema.Struct({
@@ -326,6 +338,7 @@ const mapLinearIssues = (
       type: state.type,
     })),
     title: issue.title,
+    url: issue.url,
   }))
 
 const compareLinearIssues = (left: LinearIssue, right: LinearIssue) =>
@@ -360,6 +373,7 @@ const issuesQuery = `query OrcaIssues($after: String) {
       id
       identifier
       title
+      url
       description
       priority
       createdAt
@@ -413,6 +427,12 @@ const issuesQuery = `query OrcaIssues($after: String) {
         }
       }
     }
+  }
+}`
+
+const issueUrlQuery = `query OrcaIssueUrl($id: String!) {
+  issue(id: $id) {
+    url
   }
 }`
 

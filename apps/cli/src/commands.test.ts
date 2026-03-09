@@ -279,6 +279,7 @@ const fixedLinearLayer = (issues: ReadonlyArray<LinearIssue>) =>
     Linear.of({
       authenticate: Effect.die("not used in this test"),
       commentOnIssue: () => Effect.die("not used in this test"),
+      issueUrl: () => Effect.die("not used in this test"),
       issues: Effect.succeed(issues),
       markIssueInProgress: () => Effect.die("not used in this test"),
       viewer: Effect.die("not used in this test"),
@@ -294,6 +295,7 @@ const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<LinearIssu
       return Linear.of({
         authenticate: Effect.die("not used in this test"),
         commentOnIssue: () => Effect.die("not used in this test"),
+        issueUrl: () => Effect.die("not used in this test"),
         issues: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? [], current + 1]),
         markIssueInProgress: () => Effect.die("not used in this test"),
         viewer: Effect.die("not used in this test"),
@@ -332,4 +334,5 @@ const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "ident
   state: overrides.state ?? "unstarted",
   teamStates: overrides.teamStates ?? [],
   title: overrides.title,
+  url: overrides.url ?? `https://linear.app/orca/issue/${overrides.identifier}/${overrides.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "issue"}`,
 })
