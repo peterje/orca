@@ -63,6 +63,27 @@ describe("PromptGen", () => {
       expect(result.promptFileContents).toContain("- Address the requested Greptile feedback and keep the existing pull request moving.")
       expect(result.promptFileContents).toContain("- Have the existing branch ready for another Greptile review pass.")
     }).pipe(Effect.provide(makePromptGenLayer())))
+
+  it.effect("guides merge conflict follow-up after weave leaves conflicts behind", () =>
+    Effect.gen(function* () {
+      const promptGen = yield* PromptGen
+      const result = yield* promptGen.buildMergeConflictPrompt({
+        baseBranch: "main",
+        branch: "orca/pet-23-use-weave",
+        conflictFiles: ["apps/cli/src/runner.ts", "README.md"],
+        issueDescription: "Use weave before asking the agent to fix merge conflicts.",
+        issueIdentifier: "PET-23",
+        issueTitle: "Use weave for merge-conflict handling",
+        pullRequestUrl: "https://github.com/peterje/orca/pull/23",
+        verify: ["bun run check", "bun run test"],
+      })
+
+      expect(result.prompt).toContain("merge conflicts")
+      expect(result.promptFileContents).toContain("## Merge conflict context")
+      expect(result.promptFileContents).toContain("weave-backed merge")
+      expect(result.promptFileContents).toContain("apps/cli/src/runner.ts")
+      expect(result.promptFileContents).toContain("- Resolve all remaining merge conflicts before finishing.")
+    }).pipe(Effect.provide(makePromptGenLayer())))
 })
 
 const makePromptGenLayer = () =>

@@ -88,6 +88,7 @@ describe("GitHub", () => {
       expect(feedback).toMatchObject({
         authorLogin: "author",
         labels: ["orca-review"],
+        mergeStateStatus: "BEHIND",
         number: 42,
         reviews: [
           {
@@ -129,6 +130,7 @@ describe("GitHub", () => {
                     ],
                   },
                   isDraft: true,
+                  mergeStateStatus: "BEHIND",
                   labels: {
                     nodes: [{ name: "orca-review" }],
                   },

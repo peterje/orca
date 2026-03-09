@@ -34,8 +34,33 @@ describe("tracked pull request queue", () => {
       expect(removedPullRequests).toEqual(["peterje/orca#41", "peterje/orca#42"])
       expect(queue.openPullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-3", "ENG-4"])
       expect(queue.pendingReviews.map((review) => review.pullRequest.issueIdentifier)).toEqual(["ENG-3"])
+      expect(queue.pullRequestsNeedingBaseSync).toEqual([])
       expect(queue.waitingForReviewPullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-4"])
       expect(queue.stalePullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-1", "ENG-2"])
+    }))
+
+  it.effect("separates tracked pull requests that need a base sync from review follow-up work", () =>
+    Effect.gen(function* () {
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({ issueId: "issue-5", issueIdentifier: "ENG-5", prNumber: 45, prUrl: "https://github.com/peterje/orca/pull/45", waitingForGreptileReviewSinceMs: 5 }),
+            trackedPullRequest({ issueId: "issue-6", issueIdentifier: "ENG-6", prNumber: 46, prUrl: "https://github.com/peterje/orca/pull/46", waitingForGreptileReviewSinceMs: 6 }),
+          ]),
+          remove: () => Effect.succeed(false),
+        },
+      })
+
+      expect(queue.pullRequestsNeedingBaseSync.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-5", "ENG-6"])
+      expect(queue.pendingReviews).toEqual([])
+      expect(queue.waitingForReviewPullRequests).toEqual([])
     }))
 })
 
@@ -66,6 +91,8 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
     url: "https://github.com/peterje/orca/pull/43",
   }),
   "peterje/orca#44": pullRequestFeedback({ number: 44, url: "https://github.com/peterje/orca/pull/44" }),
+  "peterje/orca#45": pullRequestFeedback({ mergeStateStatus: "BEHIND", number: 45, url: "https://github.com/peterje/orca/pull/45" }),
+  "peterje/orca#46": pullRequestFeedback({ mergeStateStatus: "DIRTY", number: 46, url: "https://github.com/peterje/orca/pull/46" }),
 }
 
 const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Type> & Pick<typeof OrcaManagedPullRequest.Type, "issueId" | "issueIdentifier" | "prNumber" | "prUrl">) =>
@@ -91,6 +118,7 @@ function pullRequestFeedback(overrides?: Partial<PullRequestFeedback>): PullRequ
     comments: overrides?.comments ?? [],
     isDraft: overrides?.isDraft ?? true,
     labels: overrides?.labels ?? [],
+    mergeStateStatus: overrides?.mergeStateStatus ?? "CLEAN",
     number: overrides?.number ?? 1,
     reviewThreads: overrides?.reviewThreads ?? [],
     reviews: overrides?.reviews ?? [],

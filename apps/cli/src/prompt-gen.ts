@@ -25,6 +25,19 @@ export type PromptGenService = {
     readonly prompt: string
     readonly promptFileContents: string
   }, PromptGenError>
+  buildMergeConflictPrompt: (options: {
+    readonly baseBranch: string
+    readonly branch: string
+    readonly conflictFiles: ReadonlyArray<string>
+    readonly issueDescription: string
+    readonly issueIdentifier: string
+    readonly issueTitle: string
+    readonly pullRequestUrl: string
+    readonly verify: ReadonlyArray<string>
+  }) => Effect.Effect<{
+    readonly prompt: string
+    readonly promptFileContents: string
+  }, PromptGenError>
 }
 
 export const PromptGen = ServiceMap.Service<PromptGenService>("orca/PromptGen")
@@ -149,7 +162,76 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
       return { prompt, promptFileContents }
     })
 
-  return PromptGen.of({ buildImplementationPrompt, buildReviewPrompt })
+  const buildMergeConflictPrompt = (options: {
+    readonly baseBranch: string
+    readonly branch: string
+    readonly conflictFiles: ReadonlyArray<string>
+    readonly issueDescription: string
+    readonly issueIdentifier: string
+    readonly issueTitle: string
+    readonly pullRequestUrl: string
+    readonly verify: ReadonlyArray<string>
+  }) =>
+    Effect.gen(function* () {
+      const repoInstructions = yield* readAgentsInstructions(fs)
+      const prompt = `Resolve the attached merge conflicts in the current repository without asking for permission.`
+      const promptFileContents = `# Pull request merge conflict
+
+Identifier: ${options.issueIdentifier}
+Title: ${options.issueTitle}
+
+## Original issue description
+
+${options.issueDescription.trim().length > 0 ? options.issueDescription : "No description provided."}
+
+## Existing pull request
+
+- URL: ${options.pullRequestUrl}
+- Branch: ${options.branch}
+- Base branch: ${options.baseBranch}
+
+## Merge conflict context
+
+- Orca already fetched \`origin/${options.baseBranch}\` and attempted a weave-backed merge with \`git merge --no-commit --no-ff origin/${options.baseBranch}\`.
+- Resolve the remaining conflicts, keep the merge intact, and leave the existing pull request ready for verification.
+
+${options.conflictFiles.length > 0 ? `## Unresolved conflict files
+
+${options.conflictFiles.map((file) => `- \`${file}\``).join("\n")}
+
+` : ""}## Repo instructions
+
+${repoInstructions}
+
+## Orca execution constraints
+
+- Work only in the current worktree on branch \`${options.branch}\`.
+- Base branch is \`${options.baseBranch}\`.
+- Finish resolving the tracked pull request merge conflicts and keep the existing pull request moving.
+- Do not ask for permission; pick reasonable defaults and keep going.
+- Do not mutate unrelated git state.
+- Do not commit secrets or any files under \`.orca/\`.
+- Prefer a conventional commit if you create a commit.
+- Keep using the existing branch and pull request.
+
+## Verification commands
+
+${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``).join("\n") : "- No repo-specific verification commands configured."}
+
+## Required git outcome
+
+- Have the existing branch ready for another Greptile review pass.
+- Resolve all remaining merge conflicts before finishing.
+- If you commit, use a conventional commit message.
+- Update the existing pull request instead of creating a new branch or pull request.
+- Keep the pull request title unchanged.
+- Mention the verification commands you ran in any pull request update you make.
+`
+
+      return { prompt, promptFileContents }
+    })
+
+  return PromptGen.of({ buildImplementationPrompt, buildMergeConflictPrompt, buildReviewPrompt })
 })
 
 export const PromptGenLayer = Layer.effect(PromptGen, PromptGenLive)

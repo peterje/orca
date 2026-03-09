@@ -41,6 +41,7 @@ export type PullRequestFeedback = PullRequestInfo & {
   readonly authorLogin: string
   readonly comments: ReadonlyArray<PullRequestComment>
   readonly labels: ReadonlyArray<string>
+  readonly mergeStateStatus: string
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>
   readonly reviews: ReadonlyArray<PullRequestReview>
 }
@@ -354,6 +355,7 @@ const parsePullRequestFeedback = (raw: string): PullRequestFeedback => {
           readonly comments?: { readonly nodes?: ReadonlyArray<PullRequestNodeCommentJson> }
           readonly isDraft?: boolean
           readonly labels?: { readonly nodes?: ReadonlyArray<{ readonly name?: string }> }
+          readonly mergeStateStatus?: string | null
           readonly number?: number
           readonly reviewThreads?: { readonly nodes?: ReadonlyArray<PullRequestNodeReviewThreadJson> }
           readonly reviews?: { readonly nodes?: ReadonlyArray<PullRequestNodeReviewJson> }
@@ -376,6 +378,7 @@ const parsePullRequestFeedback = (raw: string): PullRequestFeedback => {
     labels: (pullRequest.labels?.nodes ?? [])
       .map((label) => label.name)
       .filter((label): label is string => typeof label === "string" && label.trim().length > 0),
+    mergeStateStatus: typeof pullRequest.mergeStateStatus === "string" ? pullRequest.mergeStateStatus : "UNKNOWN",
     number: pullRequest.number,
     reviewThreads: (pullRequest.reviewThreads?.nodes ?? []).map(mapReviewThread),
     reviews: (pullRequest.reviews?.nodes ?? []).map(mapReview),
@@ -467,6 +470,7 @@ query PullRequestFeedback($owner: String!, $repo: String!, $pr: Int!) {
       url
       state
       isDraft
+      mergeStateStatus
       labels(first: 50) {
         nodes {
           name
