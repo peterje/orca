@@ -23,10 +23,12 @@ bun install
 ### Bootstrap Orca in a repo
 
 ```bash
-bun run orca init --repo owner/name
+bun run orca init --repo owner/name --linear-workspace peteredm
 ```
 
 This creates repo-local Orca config in `./.orca/repo.json` and infers verification commands from `package.json`.
+
+`--linear-workspace` is optional. When set, Orca only considers issues from that Linear workspace slug for `orca issues list`, `orca status`, `orca serve`, and `orca run next`.
 
 ### Authenticate with Linear
 
@@ -44,7 +46,8 @@ bun run orca issues list
 
 The planner includes:
 
-- issues tagged with `Orca`
+- issues in the configured Linear workspace, when `linearWorkspace` is set in `./.orca/repo.json`
+- issues tagged with the configured Linear label (default `Orca`)
 - incomplete blockers of tagged issues
 - incomplete child issues needed to unblock tagged work
 
@@ -84,7 +87,7 @@ In execution mode, Orca creates a git worktree under `./.orca/worktrees/`, runs 
 
 ## Command guide
 
-- `bun run orca init` - create or update repo-local Orca config
+- `bun run orca init` - create or update repo-local Orca config, including optional Linear workspace scoping
 - `bun run orca linear auth` - authenticate with Linear via OAuth PKCE
 - `bun run orca issues list` - show actionable and blocked Orca work
 - `bun run orca status` - show the current mission-control snapshot
@@ -109,4 +112,4 @@ bun run build
 
 ## How Orca decides what to work on
 
-Orca starts from Linear issues tagged with `Orca`, recursively pulls in incomplete blockers and child issues, then sorts actionable work by effective priority and creation time. Direct Orca issues use their own priority; inherited blockers use the most urgent priority of the Orca-tagged issue they unblock.
+Orca starts from Linear issues in the configured workspace, when one is set, then selects issues tagged with the configured label (default `Orca`), recursively pulls in incomplete blockers and child issues, and sorts actionable work by effective priority and creation time. Direct Orca issues use their own priority; inherited blockers use the most urgent priority of the Orca-tagged issue they unblock.

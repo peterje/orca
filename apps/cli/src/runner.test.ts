@@ -811,9 +811,11 @@ const makeRunnerLayer = (options: {
           Linear.of({
             authenticate: Effect.die("not used in this test"),
             commentOnIssue: () => Effect.void,
-            issues: Effect.succeed(
-              options.issues ?? [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Example issue" })],
-            ),
+            issues: (request) =>
+              Effect.succeed(filterIssuesByWorkspace(
+                options.issues ?? [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Example issue" })],
+                request?.workspaceSlug,
+              )),
             markIssueInProgress: () => Effect.void,
             viewer: Effect.die("not used in this test"),
           }),
@@ -932,6 +934,7 @@ const makeRunnerLayer = (options: {
               draftPr: true,
               greptilePollIntervalSeconds: 30,
               linearLabel: "Orca",
+              linearWorkspace: undefined,
               maxWaitingPullRequests: 4,
               repo: "peterje/orca",
               setup: ["bun install"],
@@ -1083,6 +1086,14 @@ const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "ident
   teamStates: overrides.teamStates ?? [],
   title: overrides.title,
 })
+
+const filterIssuesByWorkspace = (issues: ReadonlyArray<LinearIssue>, workspaceSlug: string | undefined) => {
+  const normalizedWorkspaceSlug = workspaceSlug?.trim().toLowerCase()
+
+  return normalizedWorkspaceSlug === undefined || normalizedWorkspaceSlug.length === 0
+    ? issues
+    : issues.filter((issue) => ("workspaceSlug" in issue ? String((issue as LinearIssue & { readonly workspaceSlug?: string }).workspaceSlug ?? "").toLowerCase() : "") === normalizedWorkspaceSlug)
+}
 
 const withTempDirectory = <A, E, R>(use: (tempDirectory: string) => Effect.Effect<A, E, R>) =>
   Effect.acquireRelease(

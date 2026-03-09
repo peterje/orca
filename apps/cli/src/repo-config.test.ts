@@ -42,13 +42,16 @@ describe("RepoConfig", () => {
         const repoConfig = yield* RepoConfig
         const config = yield* repoConfig.bootstrap({
           baseBranch: "main",
+          linearWorkspace: "  PeterEdm ",
           repo: "peterje/orca",
         })
 
         expect(config.greptilePollIntervalSeconds).toBe(defaultGreptilePollIntervalSeconds)
+        expect(config.linearWorkspace).toBe("peteredm")
         expect(config.maxWaitingPullRequests).toBe(defaultMaxWaitingPullRequests)
         expect(JSON.parse(readFileSync(join(tempDirectory, ".orca/repo.json"), "utf8"))).toMatchObject({
           greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
+          linearWorkspace: "peteredm",
           maxWaitingPullRequests: defaultMaxWaitingPullRequests,
         })
       }).pipe(Effect.provide(repoConfigLayer)),

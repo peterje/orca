@@ -1,4 +1,4 @@
-import { Console, Effect } from "effect"
+import { Console, Effect, Option } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
 import { RepoConfig } from "../repo-config.ts"
 
@@ -24,12 +24,15 @@ export const commandInit = Command.make(
       Flag.withDescription("Linear label used to select executable issues."),
       Flag.withDefault("Orca"),
     ),
+    linearWorkspace: Flag.optional(Flag.string("linear-workspace").pipe(
+      Flag.withDescription("Linear workspace slug used to scope issue loading for this repo."),
+    )),
     repo: Flag.string("repo").pipe(
       Flag.withDescription("GitHub repo in owner/name format."),
       Flag.withDefault("owner/name"),
     ),
   },
-  Effect.fn("commandInit")(function* ({ agent, baseBranch, branchPrefix, force, linearLabel, repo }) {
+  Effect.fn("commandInit")(function* ({ agent, baseBranch, branchPrefix, force, linearLabel, linearWorkspace, repo }) {
     const repoConfig = yield* RepoConfig
     const config = yield* repoConfig.bootstrap({
       agent,
@@ -37,6 +40,7 @@ export const commandInit = Command.make(
       branchPrefix,
       force,
       linearLabel,
+      linearWorkspace: Option.getOrUndefined(linearWorkspace),
       repo: repo === "owner/name" ? undefined : repo,
     })
     const path = yield* repoConfig.configPath
@@ -45,6 +49,8 @@ export const commandInit = Command.make(
     yield* Console.log(`Repo: ${config.repo}`)
     yield* Console.log(`Base branch: ${config.baseBranch}`)
     yield* Console.log(`Agent: ${config.agent}`)
+    yield* Console.log(`Linear label: ${config.linearLabel}`)
+    yield* Console.log(`Linear workspace: ${config.linearWorkspace ?? "all visible workspaces"}`)
     yield* Console.log(`Greptile poll interval: ${config.greptilePollIntervalSeconds}s`)
     yield* Console.log(`Max waiting PRs: ${config.maxWaitingPullRequests}`)
     yield* Console.log(`Verification: ${config.verify.length > 0 ? config.verify.join(", ") : "none configured"}`)

@@ -37,7 +37,9 @@ export type LinearService = {
     readonly body: string
     readonly issueId: string
   }) => Effect.Effect<void, LinearApiError | LinearAuthRequiredError>
-  issues: Effect.Effect<ReadonlyArray<LinearIssue>, LinearApiError | LinearAuthRequiredError>
+  issues: (options?: {
+    readonly workspaceSlug?: string | undefined
+  }) => Effect.Effect<ReadonlyArray<LinearIssue>, LinearApiError | LinearAuthRequiredError>
   markIssueInProgress: (issue: LinearIssue) => Effect.Effect<void, LinearApiError | LinearAuthRequiredError>
   viewer: Effect.Effect<LinearViewer, LinearApiError | LinearAuthRequiredError>
 }
@@ -139,7 +141,7 @@ export const LinearLive = Layer.effect(
       })
     }
 
-    const issues = Effect.gen(function* () {
+    const issues = (options?: { readonly workspaceSlug?: string | undefined }) => Effect.gen(function* () {
       const collected: Array<typeof LinearIssueNode.Type> = []
       let after: string | null = null
 
@@ -154,7 +156,12 @@ export const LinearLive = Layer.effect(
         after = page.issues.pageInfo.endCursor
       }
 
-      return mapLinearIssues(collected).sort(compareLinearIssues)
+      const normalizedWorkspaceSlug = normalizeWorkspaceSlug(options?.workspaceSlug)
+
+      return mapLinearIssues(collected)
+        .filter((issue) => normalizedWorkspaceSlug === undefined || issue.workspaceSlug === normalizedWorkspaceSlug)
+        .map(({ workspaceSlug: _workspaceSlug, ...issue }) => issue)
+        .sort(compareLinearIssues)
     })
 
     const commentOnIssue = (options: {
@@ -256,10 +263,17 @@ const LinearIssueNode = Schema.Struct({
   priority: Schema.Number,
   state: IssueState,
   team: Schema.Struct({
+    organization: Schema.Struct({
+      urlKey: Schema.String,
+    }),
     states: TeamStates,
   }),
   title: Schema.String,
 })
+
+type LinearIssueWithWorkspace = LinearIssue & {
+  readonly workspaceSlug: string
+}
 
 const CommentCreatePayload = Schema.Struct({
   commentCreate: Schema.Struct({
@@ -296,7 +310,7 @@ const GraphqlEnvelope = Schema.Struct({
 
 const mapLinearIssues = (
   issues: ReadonlyArray<typeof LinearIssueNode.Type>,
-): Array<LinearIssue> =>
+): Array<LinearIssueWithWorkspace> =>
   issues.map((issue) => ({
     blockedBy: issue.inverseRelations.nodes
       .filter((relation) => relation.type.toLowerCase() === "blocks")
@@ -324,6 +338,7 @@ const mapLinearIssues = (
       type: state.type,
     })),
     title: issue.title,
+    workspaceSlug: normalizeWorkspaceSlug(issue.team.organization.urlKey) ?? issue.team.organization.urlKey,
   }))
 
 const compareLinearIssues = (left: LinearIssue, right: LinearIssue) =>
@@ -357,6 +372,11 @@ const isReviewState = (name: string) => /\breview\b/i.test(name)
 const isTerminalState = (stateType: string) => {
   const normalized = stateType.toLowerCase()
   return normalized === "completed" || normalized === "canceled"
+}
+
+const normalizeWorkspaceSlug = (workspaceSlug: string | undefined) => {
+  const normalized = workspaceSlug?.trim().toLowerCase()
+  return normalized && normalized.length > 0 ? normalized : undefined
 }
 
 const viewerQuery = `query Viewer {
@@ -407,6 +427,9 @@ const issuesQuery = `query OrcaIssues($after: String) {
         type
       }
       team {
+        organization {
+          urlKey
+        }
         states(first: 50) {
           nodes {
             id

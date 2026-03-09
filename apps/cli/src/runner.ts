@@ -92,7 +92,7 @@ export const RunnerLive = Effect.gen(function* () {
       return Option.some({ config, kind: "review", review } satisfies SelectedWork)
     }
 
-    const issues = yield* linear.issues.pipe(Effect.mapError(toRunnerFailure))
+    const issues = yield* linear.issues({ workspaceSlug: config.linearWorkspace }).pipe(Effect.mapError(toRunnerFailure))
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
     const issue = plan.actionable.find((candidate) => !trackedIssueIds.has(candidate.id))
     if (!issue) {
