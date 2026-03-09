@@ -19,6 +19,7 @@ import {
   LinearOAuthError,
 } from "./linear/token-manager.ts"
 import { PromptGenLayer } from "./prompt-gen.ts"
+import { PullRequestStoreLayer } from "./pull-request-store.ts"
 import { RepoConfigError, RepoConfigLayer } from "./repo-config.ts"
 import { RunnerFailure, RunnerLayer, RunnerNoWorkError } from "./runner.ts"
 import { RunStateBusyError, RunStateLayer } from "./run-state.ts"
@@ -39,6 +40,7 @@ const supportLayer = Layer.mergeAll(
   WorktreeLayer,
   AgentRunnerLayer,
   PromptGenLayer,
+  PullRequestStoreLayer,
   VerifierLayer,
   GitHubLayer,
 ).pipe(Layer.provide(PlatformServices))

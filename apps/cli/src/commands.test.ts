@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, FileSystem, Fiber, Layer, Path, Ref, Stdio, Terminal } from "effect"
+import { Effect, FileSystem, Fiber, Layer, Option, Path, Ref, Stdio, Terminal } from "effect"
 import { Command } from "effect/unstable/cli"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { TestClock, TestConsole } from "effect/testing"
@@ -13,7 +13,7 @@ import { Runner } from "./runner.ts"
 describe("CLI commands", () => {
   it.effect("renders the issues list with actionable and blocked sections", () =>
     Effect.gen(function* () {
-      const run = makeCliRunner(commandIssues)
+      const run = makeIssuesCliRunner()
 
       yield* run(["issues", "list"])
 
@@ -50,7 +50,7 @@ describe("CLI commands", () => {
 
   it.effect("renders inherited subissues as actionable work before the tagged parent", () =>
     Effect.gen(function* () {
-      const run = makeCliRunner(commandIssues)
+      const run = makeIssuesCliRunner()
 
       yield* run(["issues", "list"])
 
@@ -92,7 +92,7 @@ describe("CLI commands", () => {
 
   it.effect("renders the dependency graph even when nothing is blocked", () =>
     Effect.gen(function* () {
-      const run = makeCliRunner(commandIssues)
+      const run = makeIssuesCliRunner()
 
       yield* run(["issues", "list"])
 
@@ -126,7 +126,7 @@ describe("CLI commands", () => {
 
   it.effect("renders nested dependency chains in the graph", () =>
     Effect.gen(function* () {
-      const run = makeCliRunner(commandIssues)
+      const run = makeIssuesCliRunner()
 
       yield* run(["issues", "list"])
 
@@ -176,7 +176,7 @@ describe("CLI commands", () => {
 
   it.effect("serve only logs when the selected issue changes or work disappears", () =>
     Effect.gen(function* () {
-      const run = makeCliRunner(commandServe)
+      const run = makeServeCliRunner()
       const fiber = yield* Effect.forkChild(run(["serve", "--interval-seconds", "1"]))
 
       yield* Effect.yieldNow
@@ -193,20 +193,57 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          sequencingLinearLayer([
-            [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, priority: 1, title: "First issue" })],
-            [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, priority: 1, title: "First issue" })],
-            [issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, priority: 1, title: "Second issue" })],
-            [],
-            [],
+          sequencingRunnerLayer([
+            Option.some({ id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" }),
+            Option.some({ id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" }),
+            Option.some({ id: "issue-2", issueIdentifier: "ENG-2", kind: "implementation", title: "Second issue" }),
+            Option.none(),
+            Option.none(),
+          ]),
+        ),
+      ),
+    ))
+
+  it.effect("serve previews review work before implementation work", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(2_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Would review: ENG-9 Existing PR (https://github.com/peterje/orca/pull/9)",
+        "Would implement: ENG-10 New issue",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingRunnerLayer([
+            Option.some({
+              id: "peterje/orca#9",
+              issueIdentifier: "ENG-9",
+              kind: "review",
+              pullRequestNumber: 9,
+              pullRequestUrl: "https://github.com/peterje/orca/pull/9",
+              title: "Existing PR",
+            }),
+            Option.some({ id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" }),
+            Option.some({ id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" }),
           ]),
         ),
       ),
     ))
 })
 
-const makeCliRunner = (...subcommands: Array<typeof commandIssues | typeof commandServe>) =>
-  Command.runWith(commandRoot.pipe(Command.withSubcommands(subcommands)), { version: "0.0.0" })
+const makeIssuesCliRunner = () =>
+  Command.runWith(commandRoot.pipe(Command.withSubcommands([commandIssues])), { version: "0.0.0" })
+
+const makeServeCliRunner = () =>
+  Command.runWith(commandRoot.pipe(Command.withSubcommands([commandServe])), { version: "0.0.0" })
 
 const cliEnvironmentLayer = Layer.mergeAll(
   FileSystem.layerNoop({}),
@@ -218,12 +255,6 @@ const cliEnvironmentLayer = Layer.mergeAll(
       clear: Effect.void,
       current: Effect.succeed(null as ActiveRun | null),
       update: () => Effect.succeed(null as ActiveRun | null),
-    }),
-  ),
-  Layer.succeed(
-    Runner,
-    Runner.of({
-      runNext: Effect.die("not used in this test"),
     }),
   ),
   Layer.succeed(
@@ -266,6 +297,21 @@ const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<LinearIssu
         issues: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? [], current + 1]),
         markIssueInProgress: () => Effect.die("not used in this test"),
         viewer: Effect.die("not used in this test"),
+      })
+    }),
+  )
+
+const sequencingRunnerLayer = (
+  snapshots: ReadonlyArray<Option.Option<{ readonly id: string; readonly issueIdentifier: string; readonly kind: "implementation"; readonly title: string } | { readonly id: string; readonly issueIdentifier: string; readonly kind: "review"; readonly pullRequestNumber: number; readonly pullRequestUrl: string; readonly title: string }>>,
+) =>
+  Layer.effect(
+    Runner,
+    Effect.gen(function* () {
+      const index = yield* Ref.make(0)
+
+      return Runner.of({
+        peekNext: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? Option.none(), current + 1]),
+        runNext: Effect.die("not used in this test"),
       })
     }),
   )

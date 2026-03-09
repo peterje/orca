@@ -19,6 +19,10 @@ export type WorktreeService = {
     readonly issueTitle: string
     readonly setup: ReadonlyArray<string>
   }) => Effect.Effect<ManagedWorktree, WorktreeError>
+  resume: (options: {
+    readonly branch: string
+    readonly setup: ReadonlyArray<string>
+  }) => Effect.Effect<ManagedWorktree, WorktreeError>
 }
 
 export const Worktree = ServiceMap.Service<WorktreeService>("orca/Worktree")
@@ -69,19 +73,51 @@ export const WorktreeLive = Effect.gen(function* () {
       }
 
       const managed = makeManagedWorktree({ branch, directory, repoRoot, spawner })
-      for (const command of options.setup) {
-        const exitCode = yield* managed.run(command)
-        if (exitCode !== 0) {
-          return yield* Effect.fail(
-            new WorktreeError({ message: `Setup command failed: ${command}` }),
-          )
-        }
-      }
+      yield* runSetup(managed, options.setup)
 
       return managed
     })
 
-  return Worktree.of({ create })
+  const resume = (options: {
+    readonly branch: string
+    readonly setup: ReadonlyArray<string>
+  }) =>
+    Effect.gen(function* () {
+      yield* fs.makeDirectory(worktreesRoot, { recursive: true }).pipe(
+        Effect.mapError((cause) => new WorktreeError({ message: `Failed to create ${worktreesRoot}.`, cause })),
+      )
+
+      yield* ensureLocalBranch({ branch: options.branch, repoRoot, spawner })
+
+      const directory = yield* allocateResumeDirectory({
+        baseDirectory: worktreesRoot,
+        branch: options.branch,
+        fs,
+        path,
+      })
+
+      const addExitCode = yield* spawner.exitCode(
+        makeShellCommand({
+          command: `git worktree add ${shellQuote(directory)} ${shellQuote(options.branch)}`,
+          cwd: repoRoot,
+        }),
+      ).pipe(
+        Effect.mapError((cause) => new WorktreeError({ message: `Failed to resume worktree ${directory}.`, cause })),
+      )
+
+      if (addExitCode !== 0) {
+        return yield* Effect.fail(
+          new WorktreeError({ message: `git worktree add exited with status ${addExitCode}.` }),
+        )
+      }
+
+      const managed = makeManagedWorktree({ branch: options.branch, directory, repoRoot, spawner })
+      yield* runSetup(managed, options.setup)
+
+      return managed
+    })
+
+  return Worktree.of({ create, resume })
 })
 
 export const WorktreeLayer = Layer.effect(Worktree, WorktreeLive)
@@ -102,6 +138,8 @@ export const slugifyIssueTitle = (title: string) => {
 }
 
 const makeIssueName = (identifier: string, title: string) => `${identifier}-${slugifyIssueTitle(title)}`
+
+const makeBranchWorktreeName = (branch: string) => slugifyIssueTitle(branch.replace(/\//g, "-"))
 
 const allocateCandidate = (options: {
   readonly baseDirectory: string
@@ -135,6 +173,69 @@ const allocateCandidate = (options: {
     }
 
     return yield* Effect.fail(new WorktreeError({ message: "Failed to allocate a unique Orca worktree." }))
+  })
+
+const allocateResumeDirectory = (options: {
+  readonly baseDirectory: string
+  readonly branch: string
+  readonly fs: FileSystem.FileSystem
+  readonly path: Path.Path
+}) =>
+  Effect.gen(function* () {
+    const baseName = makeBranchWorktreeName(options.branch)
+    for (let index = 1; index < 1_000; index += 1) {
+      const suffix = index === 1 ? "" : `-${index}`
+      const directory = options.path.join(options.baseDirectory, `${baseName}${suffix}`)
+      const exists = yield* options.fs.exists(directory).pipe(Effect.orElseSucceed(() => false))
+      if (!exists) {
+        return directory
+      }
+    }
+
+    return yield* Effect.fail(new WorktreeError({ message: `Failed to allocate a worktree for ${options.branch}.` }))
+  })
+
+const ensureLocalBranch = (options: {
+  readonly branch: string
+  readonly repoRoot: string
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]
+}) =>
+  Effect.gen(function* () {
+    const branchExists = yield* options.spawner.exitCode(
+      makeShellCommand({
+        command: `git show-ref --verify --quiet ${shellQuote(`refs/heads/${options.branch}`)}`,
+        cwd: options.repoRoot,
+      }),
+    ).pipe(Effect.orElseSucceed(() => 1))
+    if (branchExists === 0) {
+      return
+    }
+
+    const fetchExitCode = yield* options.spawner.exitCode(
+      makeShellCommand({
+        command: `git fetch origin ${shellQuote(`refs/heads/${options.branch}:refs/heads/${options.branch}`)}`,
+        cwd: options.repoRoot,
+      }),
+    ).pipe(
+      Effect.mapError((cause) => new WorktreeError({ message: `Failed to fetch branch ${options.branch}.`, cause })),
+    )
+    if (fetchExitCode !== 0) {
+      return yield* Effect.fail(
+        new WorktreeError({ message: `Failed to fetch branch ${options.branch} from origin.` }),
+      )
+    }
+  })
+
+const runSetup = (managed: ManagedWorktree, commands: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    for (const command of commands) {
+      const exitCode = yield* managed.run(command)
+      if (exitCode !== 0) {
+        return yield* Effect.fail(
+          new WorktreeError({ message: `Setup command failed: ${command}` }),
+        )
+      }
+    }
   })
 
 const makeManagedWorktree = (options: {
