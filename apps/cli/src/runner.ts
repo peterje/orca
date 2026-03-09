@@ -10,11 +10,11 @@ import { findLatestGreptileReviewScore, type PendingPullRequestReview } from "./
 import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
 import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
-import { Worktree, WorktreeError, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
+import { Worktree, WorktreeError, makeRemoteBaseRef, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
 
 export type RunnerResult = {
   readonly issueIdentifier: string
-  readonly mode: "implementation" | "review"
+  readonly mode: "implementation" | "maintenance" | "review"
   readonly pullRequestUrl: string
   readonly worktreePath: string
 }
@@ -24,6 +24,14 @@ export type RunnerWorkItem =
       readonly id: string
       readonly issueIdentifier: string
       readonly kind: "implementation"
+      readonly title: string
+    }
+  | {
+      readonly id: string
+      readonly issueIdentifier: string
+      readonly kind: "maintenance"
+      readonly pullRequestNumber: number
+      readonly pullRequestUrl: string
       readonly title: string
     }
   | {
@@ -54,6 +62,11 @@ type SelectedWork =
     }
   | {
       readonly config: RunnerConfig
+      readonly kind: "maintenance"
+      readonly pullRequest: OrcaManagedPullRequest
+    }
+  | {
+      readonly config: RunnerConfig
       readonly kind: "review"
       readonly review: PendingPullRequestReview
     }
@@ -67,6 +80,15 @@ type WaitingForGreptileReviewPullRequest = OrcaManagedPullRequest & {
   readonly greptileCompletedAtMs: null
   readonly waitingForGreptileReviewSinceMs: number
 }
+
+type BaseSyncOutcome =
+  | {
+      readonly conflictFiles: ReadonlyArray<string>
+      readonly kind: "agent-required"
+    }
+  | {
+      readonly kind: "clean"
+    }
 
 export const RunnerLive = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -86,6 +108,12 @@ export const RunnerLive = Effect.gen(function* () {
       Effect.mapError(toRunnerFailure),
     )
     const trackedIssueIds = new Set(trackedPullRequestQueue.openPullRequests.map((pullRequest) => pullRequest.issueId))
+    const pullRequestNeedingBaseSync = trackedPullRequestQueue.pullRequestsNeedingBaseSync[0]
+
+    if (pullRequestNeedingBaseSync) {
+      return Option.some({ config, kind: "maintenance", pullRequest: pullRequestNeedingBaseSync } satisfies SelectedWork)
+    }
+
     const review = trackedPullRequestQueue.pendingReviews[0]
 
     if (review) {
@@ -159,9 +187,19 @@ export const RunnerLive = Effect.gen(function* () {
 
   const peekNext = selectNextWork.pipe(
     Effect.map(
-      Option.map((selected): RunnerWorkItem =>
-        selected.kind === "review"
-          ? {
+      Option.map((selected): RunnerWorkItem => {
+        switch (selected.kind) {
+          case "maintenance":
+            return {
+              id: `${selected.pullRequest.repo}#${selected.pullRequest.prNumber}`,
+              issueIdentifier: selected.pullRequest.issueIdentifier,
+              kind: "maintenance",
+              pullRequestNumber: selected.pullRequest.prNumber,
+              pullRequestUrl: selected.pullRequest.prUrl,
+              title: selected.pullRequest.issueTitle,
+            }
+          case "review":
+            return {
               id: `${selected.review.pullRequest.repo}#${selected.review.pullRequest.prNumber}`,
               issueIdentifier: selected.review.pullRequest.issueIdentifier,
               kind: "review",
@@ -169,12 +207,15 @@ export const RunnerLive = Effect.gen(function* () {
               pullRequestUrl: selected.review.pullRequest.prUrl,
               title: selected.review.pullRequest.issueTitle,
             }
-          : {
+          case "implementation":
+            return {
               id: selected.issue.id,
               issueIdentifier: selected.issue.identifier,
               kind: "implementation",
               title: selected.issue.title,
-            }),
+            }
+        }
+      }),
     ),
   )
 
@@ -186,8 +227,23 @@ export const RunnerLive = Effect.gen(function* () {
       )
     }
 
-    return yield* (selected.value.kind === "review"
-      ? runReview({
+    switch (selected.value.kind) {
+      case "maintenance":
+        return yield* runMaintenance({
+          agentRunner,
+          config: selected.value.config,
+          fs,
+          github,
+          linear,
+          promptGen,
+          pullRequest: selected.value.pullRequest,
+          pullRequestStore,
+          runState,
+          verifier,
+          worktree,
+        })
+      case "review":
+        return yield* runReview({
           agentRunner,
           config: selected.value.config,
           fs,
@@ -200,7 +256,8 @@ export const RunnerLive = Effect.gen(function* () {
           verifier,
           worktree,
         })
-      : runImplementation({
+      case "implementation":
+        return yield* runImplementation({
           agentRunner,
           config: selected.value.config,
           fs,
@@ -213,7 +270,8 @@ export const RunnerLive = Effect.gen(function* () {
           runState,
           verifier,
           worktree,
-        }))
+        })
+    }
   })
 
   return Runner.of({ peekNext, pollWaitingPullRequests, runNext })
@@ -381,6 +439,176 @@ const runImplementation = (options: {
             issueId: options.issue.id,
             issueIdentifier: options.issue.identifier,
           },
+          linear: options.linear,
+          managedWorktree,
+        })),
+      Effect.ensuring(options.runState.clear.pipe(Effect.orElseSucceed(() => undefined))),
+    )
+  })
+
+const runMaintenance = (options: {
+  readonly agentRunner: typeof AgentRunner.Service
+  readonly config: RunnerConfig
+  readonly fs: FileSystem.FileSystem
+  readonly github: GitHubService
+  readonly linear: LinearService
+  readonly promptGen: typeof PromptGen.Service
+  readonly pullRequest: OrcaManagedPullRequest
+  readonly pullRequestStore: typeof PullRequestStore.Service
+  readonly runState: typeof RunState.Service
+  readonly verifier: typeof Verifier.Service
+  readonly worktree: typeof Worktree.Service
+}) =>
+  Effect.gen(function* () {
+    const managedWorktree = yield* options.worktree.resume({
+      branch: options.pullRequest.branch,
+      setup: options.config.setup,
+    }).pipe(Effect.mapError(toRunnerFailure))
+
+    yield* options.runState.acquire({
+      branch: managedWorktree.branch,
+      issueId: options.pullRequest.issueId,
+      issueIdentifier: options.pullRequest.issueIdentifier,
+      issueTitle: options.pullRequest.issueTitle,
+      mode: "maintenance",
+      stage: "syncing-with-base",
+      worktreePath: managedWorktree.directory,
+    }).pipe(
+      Effect.mapError((cause) => (cause instanceof RunStateBusyError ? cause : toRunnerFailure(cause))),
+    )
+
+    return yield* Effect.gen(function* () {
+      yield* announceRunStage({
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        stage: "syncing-with-base",
+      })
+
+      const syncOutcome = yield* syncTrackedPullRequestWithBase({
+        baseBranch: options.config.baseBranch,
+        worktree: managedWorktree,
+      }).pipe(Effect.mapError(toRunnerFailure))
+
+      if (syncOutcome.kind === "agent-required") {
+        yield* setRunStage(options.runState, "resolving-merge-conflicts").pipe(Effect.mapError(toRunnerFailure))
+        yield* announceRunStage({
+          issueIdentifier: options.pullRequest.issueIdentifier,
+          issueTitle: options.pullRequest.issueTitle,
+          stage: "resolving-merge-conflicts",
+        })
+
+        const prompt = yield* options.promptGen.buildMergeConflictPrompt({
+          baseBranch: options.config.baseBranch,
+          branch: managedWorktree.branch,
+          conflictFiles: syncOutcome.conflictFiles,
+          issueDescription: options.pullRequest.issueDescription,
+          issueIdentifier: options.pullRequest.issueIdentifier,
+          issueTitle: options.pullRequest.issueTitle,
+          pullRequestUrl: options.pullRequest.prUrl,
+          verify: options.config.verify,
+        }).pipe(Effect.mapError(toRunnerFailure))
+
+        yield* writePromptFile(options.fs, managedWorktree.directory, prompt.promptFileContents)
+
+        yield* options.agentRunner.run({
+          agent: options.config.agent,
+          agentArgs: options.config.agentArgs,
+          cwd: managedWorktree.directory,
+          prompt: prompt.prompt,
+          promptFilePath: `${managedWorktree.directory}/.orca/issue.md`,
+          stallTimeoutMinutes: options.config.stallTimeoutMinutes,
+          timeoutMinutes: options.config.agentTimeoutMinutes,
+        }).pipe(Effect.mapError(toRunnerFailure))
+      }
+
+      yield* ensureNoUnresolvedMergeConflicts(managedWorktree).pipe(Effect.mapError(toRunnerFailure))
+
+      yield* setRunStage(options.runState, "verifying").pipe(Effect.mapError(toRunnerFailure))
+      yield* announceRunStage({
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        stage: "verifying",
+      })
+
+      yield* options.verifier.run({
+        commands: options.config.verify,
+        cwd: managedWorktree.directory,
+      }).pipe(Effect.mapError(toRunnerFailure))
+
+      yield* setRunStage(options.runState, "publishing-pull-request").pipe(Effect.mapError(toRunnerFailure))
+      yield* announceRunStage({
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        stage: "publishing-pull-request",
+      })
+
+      const finalizedPullRequest = yield* finalizeGitAndPullRequest({
+        allowCreatePullRequest: false,
+        commitMessage: makeMaintenanceCommitMessage(options.pullRequest, options.config.baseBranch),
+        config: options.config,
+        github: options.github,
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        worktree: managedWorktree,
+      }).pipe(Effect.mapError(toRunnerFailure))
+
+      yield* options.github.requestPullRequestReview({
+        pullRequestNumber: options.pullRequest.prNumber,
+        repo: options.pullRequest.repo,
+      }).pipe(Effect.mapError(toRunnerFailure))
+
+      const waitingForGreptileReviewSinceMs = Date.now()
+
+      yield* options.pullRequestStore.upsert({
+        branch: options.pullRequest.branch,
+        greptileCompletedAtMs: null,
+        issueDescription: options.pullRequest.issueDescription,
+        issueId: options.pullRequest.issueId,
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        prNumber: options.pullRequest.prNumber,
+        prUrl: options.pullRequest.prUrl,
+        repo: options.pullRequest.repo,
+        waitingForGreptileReviewSinceMs,
+      }).pipe(Effect.mapError(toRunnerFailure))
+
+      yield* options.runState.update({
+        prNumber: finalizedPullRequest.pullRequest.number,
+        prUrl: finalizedPullRequest.pullRequest.url,
+        stage: "waiting-for-review",
+      }).pipe(
+        Effect.mapError(toRunnerFailure),
+      )
+      yield* announceRunStage({
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        stage: "waiting-for-review",
+      })
+      yield* options.linear.commentOnIssue({
+        body: [
+          `Orca synced the pull request for ${options.pullRequest.issueIdentifier} with ${options.config.baseBranch} and requested another Greptile review.`,
+          "",
+          `- PR: ${finalizedPullRequest.pullRequest.url}`,
+        ].join("\n"),
+        issueId: options.pullRequest.issueId,
+      }).pipe(Effect.mapError(toRunnerFailure))
+
+      if (options.config.cleanupWorktreeOnSuccess) {
+        yield* managedWorktree.remove.pipe(Effect.mapError(toRunnerFailure))
+      }
+
+      return {
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        mode: "maintenance",
+        pullRequestUrl: finalizedPullRequest.pullRequest.url,
+        worktreePath: managedWorktree.directory,
+      } satisfies RunnerResult
+    }).pipe(
+      Effect.tapError((error) =>
+        reportFailure({
+          error,
+          github: options.github,
+          issue: options.pullRequest,
           linear: options.linear,
           managedWorktree,
         })),
@@ -558,6 +786,68 @@ const announceRunStage = (options: {
 }) =>
   Console.log(`Mission control: ${formatIssueLabel(options.issueIdentifier, options.issueTitle)} - ${formatActiveRunStage(options.stage)}`)
 
+const syncTrackedPullRequestWithBase = (options: {
+  readonly baseBranch: string
+  readonly worktree: ManagedWorktree
+}): Effect.Effect<BaseSyncOutcome, RunnerFailure> =>
+  Effect.gen(function* () {
+    yield* ensureWeaveConfigured(options.worktree).pipe(Effect.mapError(toRunnerFailure))
+
+    const fetchExit = yield* options.worktree.run(`git fetch origin ${shellQuote(options.baseBranch)}`).pipe(Effect.mapError(toRunnerFailure))
+    if (fetchExit !== 0) {
+      return yield* Effect.fail(new RunnerFailure({ message: `Failed to fetch origin/${options.baseBranch} before syncing the pull request.` }))
+    }
+
+    const mergeExit = yield* options.worktree.run(`git merge --no-commit --no-ff ${shellQuote(`origin/${options.baseBranch}`)}`).pipe(
+      Effect.mapError(toRunnerFailure),
+    )
+    if (mergeExit === 0) {
+      return { kind: "clean" }
+    }
+
+    const conflictFiles = yield* readUnresolvedMergeConflictFiles(options.worktree).pipe(Effect.mapError(toRunnerFailure))
+    if (conflictFiles.length === 0) {
+      return yield* Effect.fail(new RunnerFailure({ message: `Failed to sync the pull request with ${options.baseBranch} using weave.` }))
+    }
+
+    return {
+      conflictFiles,
+      kind: "agent-required",
+    }
+  })
+
+const ensureWeaveConfigured = (worktree: ManagedWorktree): Effect.Effect<void, RunnerFailure> =>
+  Effect.gen(function* () {
+    const mergeDriver = (yield* worktree.runString("git config --get merge.weave.driver").pipe(Effect.orElseSucceed(() => ""))).trim()
+
+    const weaveVersionExit = yield* worktree.run("weave --version >/dev/null 2>&1").pipe(Effect.mapError(toRunnerFailure))
+    if (weaveVersionExit !== 0 || mergeDriver.length === 0) {
+      return yield* Effect.fail(new RunnerFailure({
+        message: "Tracked pull request sync requires weave. Install `weave` and run `weave setup` in this repo before Orca tries again.",
+      }))
+    }
+  })
+
+const ensureNoUnresolvedMergeConflicts = (worktree: ManagedWorktree): Effect.Effect<void, RunnerFailure> =>
+  readUnresolvedMergeConflictFiles(worktree).pipe(
+    Effect.flatMap((conflictFiles) =>
+      conflictFiles.length === 0
+        ? Effect.succeed<void>(undefined)
+        : Effect.fail(new RunnerFailure({
+            message: `Merge conflicts remain unresolved: ${conflictFiles.join(", ")}`,
+          }))),
+  )
+
+const readUnresolvedMergeConflictFiles = (worktree: ManagedWorktree): Effect.Effect<ReadonlyArray<string>, RunnerFailure> =>
+  worktree.runString("git diff --name-only --diff-filter=U").pipe(
+    Effect.mapError(toRunnerFailure),
+    Effect.map((output) =>
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)),
+  )
+
 const finalizeGitAndPullRequest = (options: {
   readonly allowCreatePullRequest: boolean
   readonly commitMessage: string
@@ -575,7 +865,7 @@ const finalizeGitAndPullRequest = (options: {
   Effect.gen(function* () {
     const status = (yield* options.worktree.runString("git status --porcelain --untracked-files=all").pipe(Effect.mapError(toRunnerFailure))).trim()
     const aheadCount = Number(
-      (yield* options.worktree.runString(`git rev-list --count ${shellQuote(options.config.baseBranch)}..HEAD`).pipe(Effect.mapError(toRunnerFailure))).trim() || "0",
+      (yield* options.worktree.runString(`git rev-list --count ${shellQuote(makeRemoteBaseRef(options.config.baseBranch))}..HEAD`).pipe(Effect.mapError(toRunnerFailure))).trim() || "0",
     )
 
     if (status.length > 0) {
@@ -668,6 +958,9 @@ const reportFailure = (options: {
 
 const makeImplementationCommitMessage = (issue: PlannedIssue) =>
   `feat: implement ${issue.identifier.toLowerCase()} ${slugifyIssueTitle(issue.title)}`
+
+const makeMaintenanceCommitMessage = (pullRequest: OrcaManagedPullRequest, baseBranch: string) =>
+  `chore: sync ${pullRequest.issueIdentifier.toLowerCase()} with ${slugifyIssueTitle(baseBranch)}`
 
 const makeReviewCommitMessage = (pullRequest: OrcaManagedPullRequest) =>
   `fix: address ${pullRequest.issueIdentifier.toLowerCase()} review feedback`

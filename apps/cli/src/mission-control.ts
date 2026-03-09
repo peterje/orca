@@ -24,7 +24,7 @@ export type MissionControlSnapshot = {
     | {
         readonly issueIdentifier: string
         readonly issueTitle: string
-        readonly stage: "ready-to-pick-up" | "review-feedback-ready"
+        readonly stage: "ready-to-pick-up" | "review-feedback-ready" | "syncing-with-base"
       }
     | null
   readonly reviews: {
@@ -53,6 +53,9 @@ export const MissionControlLive = Effect.gen(function* () {
       Effect.mapError(toMissionControlError),
     )
     const currentIssueId = activeRun?.issueId ?? null
+    const pendingBaseSyncPullRequests = trackedPullRequestQueue.pullRequestsNeedingBaseSync.filter(
+      (pullRequest) => pullRequest.issueId !== currentIssueId,
+    )
     const pendingReviews = trackedPullRequestQueue.pendingReviews.filter((review) => review.pullRequest.issueId !== currentIssueId)
     const trackedIssueIds = new Set(trackedPullRequestQueue.openPullRequests.map((pullRequest) => pullRequest.issueId))
     const issues = yield* linear.issues({ workspaceSlug: config.linearWorkspace })
@@ -63,7 +66,13 @@ export const MissionControlLive = Effect.gen(function* () {
       (pullRequest) => pullRequest.issueId !== currentIssueId,
     ).length
 
-    const next = pendingReviews[0]
+    const next = pendingBaseSyncPullRequests[0]
+      ? {
+          issueIdentifier: pendingBaseSyncPullRequests[0].issueIdentifier,
+          issueTitle: pendingBaseSyncPullRequests[0].issueTitle,
+          stage: "syncing-with-base" as const,
+        }
+      : pendingReviews[0]
       ? {
           issueIdentifier: pendingReviews[0].pullRequest.issueIdentifier,
           issueTitle: pendingReviews[0].pullRequest.issueTitle,
@@ -118,12 +127,14 @@ export const renderMissionControl = (snapshot: MissionControlSnapshot): Array<st
 const formatIssueLabel = (issueIdentifier: string, issueTitle: string) =>
   issueTitle.trim().length > 0 ? `${issueIdentifier} ${issueTitle}` : issueIdentifier
 
-const formatQueuedStage = (stage: "ready-to-pick-up" | "review-feedback-ready") => {
+const formatQueuedStage = (stage: "ready-to-pick-up" | "review-feedback-ready" | "syncing-with-base") => {
   switch (stage) {
     case "ready-to-pick-up":
       return "ready to pick up"
     case "review-feedback-ready":
       return "review feedback ready"
+    case "syncing-with-base":
+      return "syncing with base"
   }
 }
 

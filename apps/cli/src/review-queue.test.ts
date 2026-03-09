@@ -180,6 +180,7 @@ const feedback = (overrides?: Partial<PullRequestFeedback>): PullRequestFeedback
   comments: overrides?.comments ?? [],
   isDraft: true,
   labels: overrides?.labels ?? [],
+  mergeStateStatus: overrides?.mergeStateStatus ?? "CLEAN",
   number: overrides?.number ?? 1,
   reviewThreads: overrides?.reviewThreads ?? [],
   reviews: overrides?.reviews ?? [],
