@@ -105,21 +105,24 @@ export const LinearLive = Layer.effect(
           ),
         )
 
-        const envelope = yield* Schema.decodeUnknownEffect(GraphqlEnvelope)(json).pipe(
-          Effect.mapError(
-            (cause) =>
-              new LinearApiError({
-                message: "Linear returned an unexpected GraphQL response.",
-                cause,
-              }),
-          ),
-        )
-
+        const envelope = yield* decodeGraphqlEnvelope(json)
         const errors = envelope.errors ?? []
         if (errors.length > 0) {
+          const errorMessage = errors.map((error) => error.message).join("\n")
           return yield* Effect.fail(
             new LinearApiError({
-              message: errors.map((error) => error.message).join("\n"),
+              message: shouldSuggestReauth(errorMessage)
+                ? `${errorMessage}\nRun \`orca linear auth\` again to refresh your Linear token with write access.`
+                : errorMessage,
+            }),
+          )
+        }
+
+        if (!("data" in envelope) || envelope.data === undefined) {
+          return yield* Effect.fail(
+            new LinearApiError({
+              message: "Linear returned an unexpected GraphQL response.",
+              cause: envelope,
             }),
           )
         }
@@ -283,7 +286,7 @@ const IssuesPageData = Schema.Struct({
 })
 
 const GraphqlEnvelope = Schema.Struct({
-  data: Schema.Unknown,
+  data: Schema.optional(Schema.Unknown),
   errors: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -424,3 +427,16 @@ const commentCreateMutation = `mutation OrcaCommentCreate($issueId: String!, $bo
     success
   }
 }`
+
+const decodeGraphqlEnvelope = (json: unknown) =>
+  Schema.decodeUnknownEffect(GraphqlEnvelope)(json).pipe(
+    Effect.mapError(
+      (cause) =>
+        new LinearApiError({
+          message: "Linear returned an unexpected GraphQL response.",
+          cause,
+        }),
+    ),
+  )
+
+const shouldSuggestReauth = (message: string) => /invalid scope/i.test(message)

@@ -32,6 +32,17 @@ describe("Linear", () => {
       expect(error).toBeInstanceOf(LinearApiError)
       expect(error.message).toBe("Linear exploded")
     }).pipe(Effect.provide(makeLinearTestLayer(makeGraphqlClient({ mode: "error" })))))
+
+  it.effect("suggests reauth when Linear rejects a write operation for missing scope", () =>
+    Effect.gen(function* () {
+      const linear = yield* Linear
+      const issues = yield* linear.issues
+      const error = yield* Effect.flip(linear.markIssueInProgress(issues[0]!))
+
+      expect(error).toBeInstanceOf(LinearApiError)
+      expect(error.message).toContain("Invalid scope")
+      expect(error.message).toContain("orca linear auth")
+    }).pipe(Effect.provide(makeLinearTestLayer(makeGraphqlClient({ mode: "missing-scope" })))))
 })
 
 const makeLinearTestLayer = (httpClientLayer: Layer.Layer<HttpClient.HttpClient>) =>
@@ -49,7 +60,7 @@ const makeLinearTestLayer = (httpClientLayer: Layer.Layer<HttpClient.HttpClient>
     ]),
   )
 
-const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" }) =>
+const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" | "missing-scope" }) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request, _url) => {
@@ -58,6 +69,10 @@ const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" }) =>
 
       if (options?.mode === "error") {
         return Effect.succeed(jsonResponse(request, { data: null, errors: [{ message: "Linear exploded" }] }))
+      }
+
+      if (options?.mode === "missing-scope" && query.includes("mutation OrcaIssueUpdate")) {
+        return Effect.succeed(jsonResponse(request, { errors: [{ message: "Invalid scope: `write` required" }] }, 400))
       }
 
       if (query.includes("query Viewer")) {

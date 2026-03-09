@@ -56,8 +56,17 @@ export const GitHubLive = Effect.gen(function* () {
       stdout: "pipe",
     }).pipe(
       spawner.string,
-      Effect.map((value) => JSON.parse(value) as PullRequestInfo),
-      Effect.map((value) => Option.some(value)),
+      Effect.map((value) => value.trim()),
+      Effect.flatMap((value) => {
+        if (value.length === 0) {
+          return Effect.succeed(Option.none<PullRequestInfo>())
+        }
+
+        return Effect.try({
+          try: () => Option.some(JSON.parse(value) as PullRequestInfo),
+          catch: () => Option.none<PullRequestInfo>(),
+        })
+      }),
       Effect.catch(() => Effect.succeed(Option.none<PullRequestInfo>())),
     )
 
