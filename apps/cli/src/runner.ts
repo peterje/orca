@@ -76,6 +76,7 @@ export const RunnerLive = Effect.gen(function* () {
   const selectNextWork = Effect.gen(function* () {
     const config = yield* repoConfig.read
     const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
+    const trackedIssueIds = new Set(storedPullRequests.map((pullRequest) => pullRequest.issueId))
     const reviewCandidates = yield* Effect.forEach(
       storedPullRequests,
       (pullRequest) =>
@@ -99,8 +100,12 @@ export const RunnerLive = Effect.gen(function* () {
 
     const issues = yield* linear.issues.pipe(Effect.mapError(toRunnerFailure))
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
-    const issue = plan.actionable[0]
+    const issue = plan.actionable.find((candidate) => !trackedIssueIds.has(candidate.id))
     if (!issue) {
+      return Option.none<SelectedWork>()
+    }
+
+    if (countWaitingPullRequests(storedPullRequests) >= config.maxWaitingPullRequests) {
       return Option.none<SelectedWork>()
     }
 
@@ -561,6 +566,9 @@ const makePullRequestBody = (issueIdentifier: string, verify: ReadonlyArray<stri
 const comparePendingReviews = (left: PendingPullRequestReview, right: PendingPullRequestReview) =>
   right.latestFeedbackAtMs - left.latestFeedbackAtMs
   || left.pullRequest.issueIdentifier.localeCompare(right.pullRequest.issueIdentifier)
+
+const countWaitingPullRequests = (pullRequests: ReadonlyArray<OrcaManagedPullRequest>) =>
+  pullRequests.filter((pullRequest) => pullRequest.waitingForGreptileReviewSinceMs !== null).length
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `"'"'`)}'`
 

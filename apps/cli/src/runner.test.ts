@@ -4,13 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AgentRunner } from "./agent-runner.ts"
-import { GitHub } from "./github.ts"
+import { GitHub, type PullRequestFeedback } from "./github.ts"
 import { Linear, type LinearIssue } from "./linear.ts"
 import { PromptGen } from "./prompt-gen.ts"
 import { PullRequestStore, OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData } from "./repo-config.ts"
 import { Runner, RunnerLayer } from "./runner.ts"
-import { RunState, type ActiveRun } from "./run-state.ts"
+import { RunState, RunStateBusyError, type ActiveRun } from "./run-state.ts"
 import { Verifier } from "./verifier.ts"
 import { Worktree, type ManagedWorktree } from "./worktree.ts"
 
@@ -67,11 +67,157 @@ describe("Runner", () => {
       }).pipe(Effect.provide(makeRunnerLayer({ requestedReviews, storedPullRequests, worktreeDirectory })))
     })
   })
+
+  it.effect("selects the next untracked implementation while Greptile reviews are still pending", () =>
+    withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const next = yield* runner.peekNext
+
+        expect(Option.getOrNull(next)).toMatchObject({
+          id: "issue-2",
+          issueIdentifier: "ENG-2",
+          kind: "implementation",
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [
+          issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Existing work" }),
+          issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "Next work" }),
+        ],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    ))
+
+  it.effect("pauses new implementation work when waiting pull requests reach the cap", () =>
+    withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const next = yield* runner.peekNext
+
+        expect(next).toEqual(Option.none())
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [issue({ id: "issue-5", identifier: "ENG-5", isOrcaTagged: true, title: "Blocked by cap" })],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#41": pullRequestFeedback({ number: 41, url: "https://github.com/peterje/orca/pull/41" }),
+          "peterje/orca#42": pullRequestFeedback({ number: 42, url: "https://github.com/peterje/orca/pull/42" }),
+          "peterje/orca#43": pullRequestFeedback({ number: 43, url: "https://github.com/peterje/orca/pull/43" }),
+          "peterje/orca#44": pullRequestFeedback({ number: 44, url: "https://github.com/peterje/orca/pull/44" }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            prNumber: 41,
+            prUrl: "https://github.com/peterje/orca/pull/41",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+          trackedPullRequest({
+            issueId: "issue-2",
+            issueIdentifier: "ENG-2",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 2,
+          }),
+          trackedPullRequest({
+            issueId: "issue-3",
+            issueIdentifier: "ENG-3",
+            prNumber: 43,
+            prUrl: "https://github.com/peterje/orca/pull/43",
+            waitingForGreptileReviewSinceMs: 3,
+          }),
+          trackedPullRequest({
+            issueId: "issue-4",
+            issueIdentifier: "ENG-4",
+            prNumber: 44,
+            prUrl: "https://github.com/peterje/orca/pull/44",
+            waitingForGreptileReviewSinceMs: 4,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    ))
+
+  it.effect("prioritizes actionable review work ahead of new implementation work", () =>
+    withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const next = yield* runner.peekNext
+
+        expect(Option.getOrNull(next)).toMatchObject({
+          id: "peterje/orca#42",
+          issueIdentifier: "ENG-1",
+          kind: "review",
+          pullRequestNumber: 42,
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "New work" })],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [
+              {
+                authorLogin: "reviewer",
+                body: "Please rename this helper before merge.",
+                createdAtMs: 10,
+                id: "comment-1",
+                isBot: false,
+              },
+            ],
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    ))
+
+  it.effect("allows only one active coding run at a time", () =>
+    withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const error = yield* runner.runNext.pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(RunStateBusyError)
+      }).pipe(Effect.provide(makeRunnerLayer({
+        runStateAcquire: () => Effect.fail(new RunStateBusyError({ message: "An Orca run is already active." })),
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    ))
 })
 
 const makeRunnerLayer = (options: {
-  readonly requestedReviews: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
-  readonly storedPullRequests: Array<{
+  readonly issues?: ReadonlyArray<LinearIssue>
+  readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
+  readonly requestedReviews?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
+  readonly runStateAcquire?: (
+    run: Omit<typeof ActiveRun.Type, "pid" | "prNumber" | "prUrl" | "startedAtMs">,
+  ) => Effect.Effect<ActiveRun, RunStateBusyError>
+  readonly storedPullRequests?: Array<{
     readonly branch: string
     readonly issueDescription: string
     readonly issueId: string
@@ -82,9 +228,13 @@ const makeRunnerLayer = (options: {
     readonly repo: string
     readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }>
+  readonly trackedPullRequests?: ReadonlyArray<OrcaManagedPullRequest>
   readonly worktreeDirectory: string
 }) => {
   const worktree = makeManagedWorktree(options.worktreeDirectory)
+  const requestedReviews = options.requestedReviews ?? []
+  const storedPullRequests = options.storedPullRequests ?? []
+  const trackedPullRequests = options.trackedPullRequests ?? []
 
   return RunnerLayer.pipe(
     Layer.provide(
@@ -106,11 +256,18 @@ const makeRunnerLayer = (options: {
               url: "https://github.com/peterje/orca/pull/42",
             }),
             detectRepo: Effect.die("not used in this test"),
-            readPullRequestFeedback: () => Effect.die("not used in this test"),
+            readPullRequestFeedback: (request) =>
+              Effect.succeed(
+                options.pullRequestFeedbackByKey?.[makePullRequestKey(request)]
+                ?? pullRequestFeedback({
+                  number: request.pullRequestNumber,
+                  url: `https://github.com/${request.repo}/pull/${request.pullRequestNumber}`,
+                }),
+              ),
             removePullRequestLabel: () => Effect.die("not used in this test"),
             requestPullRequestReview: (request) =>
               Effect.sync(() => {
-                options.requestedReviews.push(request)
+                requestedReviews.push(request)
               }),
             viewCurrentPullRequest: () => Effect.succeed(Option.none()),
           }),
@@ -120,7 +277,9 @@ const makeRunnerLayer = (options: {
           Linear.of({
             authenticate: Effect.die("not used in this test"),
             commentOnIssue: () => Effect.void,
-            issues: Effect.succeed([issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Example issue" })]),
+            issues: Effect.succeed(
+              options.issues ?? [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Example issue" })],
+            ),
             markIssueInProgress: () => Effect.void,
             viewer: Effect.die("not used in this test"),
           }),
@@ -139,11 +298,11 @@ const makeRunnerLayer = (options: {
         Layer.succeed(
           PullRequestStore,
           PullRequestStore.of({
-            list: Effect.succeed([]),
+            list: Effect.succeed(trackedPullRequests),
             markReviewHandled: () => Effect.die("not used in this test"),
             upsert: (record) =>
               Effect.sync(() => {
-                options.storedPullRequests.push(record)
+                storedPullRequests.push(record)
                 return new OrcaManagedPullRequest({
                   branch: record.branch,
                   createdAtMs: 1,
@@ -190,13 +349,13 @@ const makeRunnerLayer = (options: {
         Layer.succeed(
           RunState,
           RunState.of({
-            acquire: (run) => Effect.succeed({
+            acquire: options.runStateAcquire ?? ((run) => Effect.succeed({
               ...run,
               pid: process.pid,
               prNumber: null,
               prUrl: null,
               startedAtMs: 1,
-            } as ActiveRun),
+            } as ActiveRun)),
             clear: Effect.void,
             current: Effect.die("not used in this test"),
             update: () => Effect.succeed(null),
@@ -219,6 +378,37 @@ const makeRunnerLayer = (options: {
     ),
   )
 }
+
+const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Type> & Pick<typeof OrcaManagedPullRequest.Type, "issueId" | "issueIdentifier" | "prNumber" | "prUrl">) =>
+  new OrcaManagedPullRequest({
+    branch: overrides.branch ?? `orca/${overrides.issueIdentifier.toLowerCase()}`,
+    createdAtMs: overrides.createdAtMs ?? 1,
+    issueDescription: overrides.issueDescription ?? "Example issue description",
+    issueId: overrides.issueId,
+    issueIdentifier: overrides.issueIdentifier,
+    issueTitle: overrides.issueTitle ?? "Example issue",
+    lastReviewedAtMs: overrides.lastReviewedAtMs ?? null,
+    prNumber: overrides.prNumber,
+    prUrl: overrides.prUrl,
+    repo: overrides.repo ?? "peterje/orca",
+    updatedAtMs: overrides.updatedAtMs ?? 1,
+    waitingForGreptileReviewSinceMs: overrides.waitingForGreptileReviewSinceMs ?? null,
+  })
+
+const pullRequestFeedback = (overrides?: Partial<PullRequestFeedback>): PullRequestFeedback => ({
+  authorLogin: overrides?.authorLogin ?? "author",
+  comments: overrides?.comments ?? [],
+  isDraft: overrides?.isDraft ?? true,
+  labels: overrides?.labels ?? [],
+  number: overrides?.number ?? 1,
+  reviewThreads: overrides?.reviewThreads ?? [],
+  reviews: overrides?.reviews ?? [],
+  state: overrides?.state ?? "OPEN",
+  url: overrides?.url ?? "https://github.com/peterje/orca/pull/1",
+})
+
+const makePullRequestKey = (pullRequest: { readonly prNumber?: number; readonly pullRequestNumber?: number; readonly repo: string }) =>
+  `${pullRequest.repo}#${pullRequest.prNumber ?? pullRequest.pullRequestNumber}`
 
 const makeManagedWorktree = (directory: string): ManagedWorktree => ({
   branch: "orca/eng-1-example-issue",
