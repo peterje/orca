@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "build",
+  "model": "opencode/gpt-5.4",
+  "agent": {
+    "build": {
+      "model": "opencode/gpt-5.4",
+      "reasoningEffort": "high"
+    }
+  },
+  "permission": {
+    "*": "allow",
+    "question": "deny"
+  }
+}
