@@ -7,7 +7,7 @@ import type {
 } from "./github.ts"
 import type { OrcaManagedPullRequest } from "./pull-request-store.ts"
 
-type GreptileReviewScore = {
+type PendingGreptileReviewScore = {
   readonly maximum: number
   readonly value: number
 }
@@ -17,7 +17,13 @@ export type PendingPullRequestReview = {
   readonly feedbackMarkdown: string
   readonly latestFeedbackAtMs: number
   readonly pullRequest: OrcaManagedPullRequest
-  readonly reviewScore: GreptileReviewScore
+  readonly reviewScore: PendingGreptileReviewScore
+}
+
+export type GreptileReviewScore = {
+  readonly achieved: number
+  readonly review: PullRequestReview
+  readonly total: number
 }
 
 export const findPendingPullRequestReview = (options: {
@@ -38,7 +44,7 @@ export const findPendingPullRequestReview = (options: {
     return null
   }
 
-  const reviewScore = parseGreptileReviewScore(latestGreptileReview.body)
+  const reviewScore = parsePendingGreptileReviewScore(latestGreptileReview.body)
   if (reviewScore === null || reviewScore.value >= reviewScore.maximum) {
     return null
   }
@@ -82,6 +88,29 @@ export const findPendingPullRequestReview = (options: {
   }
 }
 
+export const findLatestGreptileReviewScore = (feedback: PullRequestFeedback): GreptileReviewScore | null => {
+  const latestReview = findLatestEntry(feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review)))
+
+  if (latestReview === null) {
+    return null
+  }
+
+  const score = parseGreptileScore(latestReview.body)
+  if (score === null) {
+    return null
+  }
+
+  return {
+    ...score,
+    review: latestReview,
+  }
+}
+
+export const hasLatestGreptileReviewScore = (feedback: PullRequestFeedback, achieved: number, total: number) => {
+  const score = findLatestGreptileReviewScore(feedback)
+  return score !== null && score.achieved === achieved && score.total === total
+}
+
 const greptileAuthorPrefixes = ["greptile-apps", "greptile-apps-staging"]
 
 const isGreptileEntry = (entry: { readonly authorLogin: string }) =>
@@ -101,7 +130,7 @@ const stripGreptileThreadComments = (thread: PullRequestReviewThread): PullReque
 const renderGreptileReviewMarkdown = (options: {
   readonly comments: ReadonlyArray<PullRequestComment>
   readonly reviews: ReadonlyArray<PullRequestReview>
-  readonly reviewScore: GreptileReviewScore
+  readonly reviewScore: PendingGreptileReviewScore
   readonly unresolvedThreads: ReadonlyArray<PullRequestReviewThread>
 }) => {
   const sections = [
@@ -178,18 +207,23 @@ const findLatestEntry = <A extends { readonly createdAtMs: number }>(entries: Re
   return latest
 }
 
-const parseGreptileReviewScore = (body: string): GreptileReviewScore | null => {
+const parsePendingGreptileReviewScore = (body: string): PendingGreptileReviewScore | null => {
+  const score = parseGreptileScore(body)
+  return score === null ? null : { maximum: score.total, value: score.achieved }
+}
+
+const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "review"> | null => {
   const match = body.match(/\b(?:confidence|score)\b[^\d]*(\d+)\s*\/\s*(\d+)\b/i)
   if (match === null) {
     return null
   }
 
-  const value = Number(match[1])
-  const maximum = Number(match[2])
+  const achieved = Number(match[1])
+  const total = Number(match[2])
 
-  if (!Number.isFinite(value) || !Number.isFinite(maximum) || maximum <= 0) {
+  if (!Number.isFinite(achieved) || !Number.isFinite(total) || total <= 0) {
     return null
   }
 
-  return { maximum, value }
+  return { achieved, total }
 }

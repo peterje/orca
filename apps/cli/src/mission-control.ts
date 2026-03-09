@@ -52,8 +52,9 @@ export const MissionControlLive = Effect.gen(function* () {
     const trackedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toMissionControlError))
     const currentIssueId = activeRun?.issueId ?? null
     const visiblePullRequests = trackedPullRequests.filter((pullRequest) => pullRequest.issueId !== currentIssueId)
+    const activeGreptilePullRequests = visiblePullRequests.filter((pullRequest) => pullRequest.greptileCompletedAtMs === null)
     const pendingReviews = yield* Effect.forEach(
-      visiblePullRequests,
+      activeGreptilePullRequests,
       (pullRequest) =>
         github.readPullRequestFeedback({
           pullRequestNumber: pullRequest.prNumber,
@@ -74,7 +75,7 @@ export const MissionControlLive = Effect.gen(function* () {
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
     const actionableIssues = plan.actionable.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))
     const blockedIssues = plan.blocked.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))
-    const waitingForReviewCount = visiblePullRequests.filter((pullRequest) => pullRequest.waitingForGreptileReviewSinceMs !== null).length
+    const waitingForReviewCount = activeGreptilePullRequests.filter((pullRequest) => pullRequest.waitingForGreptileReviewSinceMs !== null).length
 
     const next = pendingReviews[0]
       ? {

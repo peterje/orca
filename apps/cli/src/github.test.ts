@@ -199,6 +199,32 @@ describe("GitHub", () => {
       ),
     )
   })
+
+  it.effect("marks pull requests ready for review", () => {
+    const commands: Array<CommandInvocation> = []
+
+    return Effect.gen(function* () {
+      const github = yield* GitHub
+
+      yield* github.markPullRequestReadyForReview({
+        pullRequestNumber: 42,
+        repo: "peterje/orca",
+      })
+
+      expect(commands).toContainEqual({
+        args: ["pr", "ready", "42", "--repo", "peterje/orca"],
+        command: "gh",
+      })
+    }).pipe(
+      Effect.provide(
+        makeGitHubLayer({
+          onCommand: (command) => {
+            commands.push(command)
+          },
+        }),
+      ),
+    )
+  })
 })
 
 type CommandInvocation = {
