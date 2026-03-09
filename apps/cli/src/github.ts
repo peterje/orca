@@ -54,6 +54,10 @@ export type GitHubService = {
     readonly title: string
   }) => Effect.Effect<PullRequestInfo, GitHubError>
   detectRepo: Effect.Effect<string, GitHubError>
+  requestPullRequestReview: (options: {
+    readonly pullRequestNumber: number
+    readonly repo: string
+  }) => Effect.Effect<void, GitHubError>
   readPullRequestFeedback: (options: {
     readonly pullRequestNumber: number
     readonly repo: string
@@ -67,6 +71,8 @@ export type GitHubService = {
 }
 
 export const GitHub = ServiceMap.Service<GitHubService>("orca/GitHub")
+
+export const greptileReviewCommentBody = "@greptile review"
 
 export const GitHubLive = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -163,6 +169,40 @@ export const GitHubLive = Effect.gen(function* () {
       ),
     )
 
+  const requestPullRequestReview = (options: {
+    readonly pullRequestNumber: number
+    readonly repo: string
+  }) =>
+    ChildProcess.make(
+      "gh",
+      [
+        "pr",
+        "comment",
+        String(options.pullRequestNumber),
+        "--repo",
+        options.repo,
+        "--body",
+        greptileReviewCommentBody,
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    ).pipe(
+      spawner.exitCode,
+      Effect.flatMap((exitCode) =>
+        exitCode === 0
+          ? Effect.void
+          : Effect.fail(new GitHubError({ message: `Failed to request Greptile review for pull request #${options.pullRequestNumber}.` }))),
+      Effect.mapError((cause) =>
+        cause instanceof GitHubError
+          ? cause
+          : new GitHubError({
+              message: `Failed to request Greptile review for pull request #${options.pullRequestNumber}.`,
+              cause,
+            })),
+    )
+
   const readPullRequestFeedback = (options: {
     readonly pullRequestNumber: number
     readonly repo: string
@@ -233,7 +273,14 @@ export const GitHubLive = Effect.gen(function* () {
             })),
     )
 
-  return GitHub.of({ createPullRequest, detectRepo, readPullRequestFeedback, removePullRequestLabel, viewCurrentPullRequest })
+  return GitHub.of({
+    createPullRequest,
+    detectRepo,
+    readPullRequestFeedback,
+    removePullRequestLabel,
+    requestPullRequestReview,
+    viewCurrentPullRequest,
+  })
 })
 
 export const GitHubLayer = Layer.effect(GitHub, GitHubLive)

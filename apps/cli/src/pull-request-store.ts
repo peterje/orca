@@ -13,6 +13,7 @@ export class OrcaManagedPullRequest extends Schema.Class<OrcaManagedPullRequest>
   prUrl: Schema.String,
   repo: Schema.String,
   updatedAtMs: Schema.Number,
+  waitingForGreptileReviewSinceMs: Schema.NullOr(Schema.Number),
 }) {}
 
 const StoredPullRequests = Schema.Array(OrcaManagedPullRequest)
@@ -33,6 +34,7 @@ export type PullRequestStoreService = {
     readonly prNumber: number
     readonly prUrl: string
     readonly repo: string
+    readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }) => Effect.Effect<OrcaManagedPullRequest, PullRequestStoreError>
 }
 
@@ -49,7 +51,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       catch: (cause) => new PullRequestStoreError({ message: `Failed to parse ${file}.`, cause }),
     }).pipe(
       Effect.flatMap((json) =>
-        Schema.decodeUnknownEffect(StoredPullRequests)(json).pipe(
+        Schema.decodeUnknownEffect(StoredPullRequests)(normalizeStoredPullRequests(json)).pipe(
           Effect.mapError((cause) => new PullRequestStoreError({ message: `Failed to parse ${file}.`, cause })),
         )),
     )
@@ -88,6 +90,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
     readonly prNumber: number
     readonly prUrl: string
     readonly repo: string
+    readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }) =>
     Effect.gen(function* () {
       const now = Date.now()
@@ -105,6 +108,10 @@ export const PullRequestStoreLive = Effect.gen(function* () {
         prUrl: record.prUrl,
         repo: record.repo,
         updatedAtMs: now,
+        waitingForGreptileReviewSinceMs:
+          record.waitingForGreptileReviewSinceMs === undefined
+            ? existing?.waitingForGreptileReviewSinceMs ?? null
+            : record.waitingForGreptileReviewSinceMs,
       })
       const nextRecords = [
         ...records.filter((candidate) => !(candidate.repo === record.repo && candidate.prNumber === record.prNumber)),
@@ -132,6 +139,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
           ...record,
           lastReviewedAtMs: options.lastReviewedAtMs,
           updatedAtMs: now,
+          waitingForGreptileReviewSinceMs: null,
         })
         return updated
       })
@@ -151,6 +159,19 @@ export class PullRequestStoreError extends Data.TaggedError("PullRequestStoreErr
   readonly message: string
   readonly cause?: unknown
 }> {}
+
+const normalizeStoredPullRequests = (json: unknown) =>
+  Array.isArray(json)
+    ? json.map(normalizeStoredPullRequest)
+    : json
+
+const normalizeStoredPullRequest = (record: unknown) =>
+  typeof record === "object" && record !== null
+    ? {
+        waitingForGreptileReviewSinceMs: null,
+        ...record,
+      }
+    : record
 
 const comparePullRequests = (left: OrcaManagedPullRequest, right: OrcaManagedPullRequest) =>
   right.updatedAtMs - left.updatedAtMs || left.issueIdentifier.localeCompare(right.issueIdentifier)

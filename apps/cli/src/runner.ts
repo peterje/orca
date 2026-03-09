@@ -56,6 +56,11 @@ type SelectedWork =
       readonly review: PendingPullRequestReview
     }
 
+type FinalizedPullRequest = {
+  readonly pullRequest: PullRequestInfo
+  readonly wasCreated: boolean
+}
+
 export const RunnerLive = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const agentRunner = yield* AgentRunner
@@ -235,7 +240,7 @@ const runImplementation = (options: {
         cwd: managedWorktree.directory,
       }).pipe(Effect.mapError(toRunnerFailure))
 
-      const pullRequest = yield* finalizeGitAndPullRequest({
+      const finalizedPullRequest = yield* finalizeGitAndPullRequest({
         allowCreatePullRequest: true,
         commitMessage: makeImplementationCommitMessage(options.issue),
         config: options.config,
@@ -245,22 +250,36 @@ const runImplementation = (options: {
         worktree: managedWorktree,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      let waitingForGreptileReviewSinceMs: number | undefined = undefined
+
+      if (finalizedPullRequest.wasCreated) {
+        yield* options.github.requestPullRequestReview({
+          pullRequestNumber: finalizedPullRequest.pullRequest.number,
+          repo: options.config.repo,
+        }).pipe(Effect.mapError(toRunnerFailure))
+        waitingForGreptileReviewSinceMs = Date.now()
+      }
+
       yield* options.pullRequestStore.upsert({
         branch: managedWorktree.branch,
         issueDescription: options.issue.description,
         issueId: options.issue.id,
         issueIdentifier: options.issue.identifier,
         issueTitle: options.issue.title,
-        prNumber: pullRequest.number,
-        prUrl: pullRequest.url,
+        prNumber: finalizedPullRequest.pullRequest.number,
+        prUrl: finalizedPullRequest.pullRequest.url,
         repo: options.config.repo,
+        waitingForGreptileReviewSinceMs,
       }).pipe(Effect.mapError(toRunnerFailure))
 
-      yield* options.runState.update({ prNumber: pullRequest.number, prUrl: pullRequest.url }).pipe(
+      yield* options.runState.update({
+        prNumber: finalizedPullRequest.pullRequest.number,
+        prUrl: finalizedPullRequest.pullRequest.url,
+      }).pipe(
         Effect.mapError(toRunnerFailure),
       )
       yield* options.linear.commentOnIssue({
-        body: [`Orca opened a pull request for ${options.issue.identifier}.`, "", `- PR: ${pullRequest.url}`].join("\n"),
+        body: [`Orca opened a pull request for ${options.issue.identifier}.`, "", `- PR: ${finalizedPullRequest.pullRequest.url}`].join("\n"),
         issueId: options.issue.id,
       }).pipe(Effect.mapError(toRunnerFailure))
 
@@ -271,7 +290,7 @@ const runImplementation = (options: {
       return {
         issueIdentifier: options.issue.identifier,
         mode: "implementation",
-        pullRequestUrl: pullRequest.url,
+        pullRequestUrl: finalizedPullRequest.pullRequest.url,
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
     }).pipe(
@@ -347,7 +366,7 @@ const runReview = (options: {
         cwd: managedWorktree.directory,
       }).pipe(Effect.mapError(toRunnerFailure))
 
-      const pullRequest = yield* finalizeGitAndPullRequest({
+      const finalizedPullRequest = yield* finalizeGitAndPullRequest({
         allowCreatePullRequest: false,
         commitMessage: makeReviewCommitMessage(options.review.pullRequest),
         config: options.config,
@@ -371,11 +390,14 @@ const runReview = (options: {
         }).pipe(Effect.mapError(toRunnerFailure))
       }
 
-      yield* options.runState.update({ prNumber: pullRequest.number, prUrl: pullRequest.url }).pipe(
+      yield* options.runState.update({
+        prNumber: finalizedPullRequest.pullRequest.number,
+        prUrl: finalizedPullRequest.pullRequest.url,
+      }).pipe(
         Effect.mapError(toRunnerFailure),
       )
       yield* options.linear.commentOnIssue({
-        body: [`Orca updated the pull request for ${options.review.pullRequest.issueIdentifier}.`, "", `- PR: ${pullRequest.url}`].join("\n"),
+        body: [`Orca updated the pull request for ${options.review.pullRequest.issueIdentifier}.`, "", `- PR: ${finalizedPullRequest.pullRequest.url}`].join("\n"),
         issueId: options.review.pullRequest.issueId,
       }).pipe(Effect.mapError(toRunnerFailure))
 
@@ -386,7 +408,7 @@ const runReview = (options: {
       return {
         issueIdentifier: options.review.pullRequest.issueIdentifier,
         mode: "review",
-        pullRequestUrl: pullRequest.url,
+        pullRequestUrl: finalizedPullRequest.pullRequest.url,
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
     }).pipe(
@@ -422,7 +444,7 @@ const finalizeGitAndPullRequest = (options: {
   readonly issueIdentifier: string
   readonly issueTitle: string
   readonly worktree: ManagedWorktree
-}) =>
+}): Effect.Effect<FinalizedPullRequest, RunnerFailure> =>
   Effect.gen(function* () {
     const status = (yield* options.worktree.runString("git status --porcelain --untracked-files=all").pipe(Effect.mapError(toRunnerFailure))).trim()
     const aheadCount = Number(
@@ -455,14 +477,17 @@ const finalizeGitAndPullRequest = (options: {
 
     const existingPr = yield* options.github.viewCurrentPullRequest(options.worktree.directory).pipe(Effect.mapError(toRunnerFailure))
     if (Option.isSome(existingPr)) {
-      return existingPr.value
+      return {
+        pullRequest: existingPr.value,
+        wasCreated: false,
+      }
     }
 
     if (!options.allowCreatePullRequest) {
       return yield* Effect.fail(new RunnerFailure({ message: "Expected an existing pull request for review work, but none was found." }))
     }
 
-    return yield* options.github.createPullRequest({
+    const pullRequest = yield* options.github.createPullRequest({
       baseBranch: options.config.baseBranch,
       body: makePullRequestBody(options.issueIdentifier, options.config.verify),
       cwd: options.worktree.directory,
@@ -470,6 +495,11 @@ const finalizeGitAndPullRequest = (options: {
       repo: options.config.repo,
       title: `${options.issueIdentifier}: ${options.issueTitle}`,
     }).pipe(Effect.mapError(toRunnerFailure))
+
+    return {
+      pullRequest,
+      wasCreated: true,
+    }
   })
 
 const reportFailure = (options: {
