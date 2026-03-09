@@ -41,6 +41,7 @@ describe("GitHub", () => {
       })
 
       expect(feedback).toMatchObject({
+        authorLogin: "author",
         labels: ["orca-review"],
         number: 42,
         reviews: [
@@ -71,6 +72,7 @@ describe("GitHub", () => {
             data: {
               repository: {
                 pullRequest: {
+                  author: { login: "author" },
                   comments: {
                     nodes: [
                       {

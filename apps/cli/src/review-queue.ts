@@ -14,7 +14,7 @@ export type PendingPullRequestReview = {
   readonly feedbackMarkdown: string
   readonly latestFeedbackAtMs: number
   readonly pullRequest: OrcaManagedPullRequest
-  readonly trigger: "label" | "mention"
+  readonly trigger: "feedback" | "label" | "mention"
   readonly triggerLabelPresent: boolean
 }
 
@@ -28,28 +28,34 @@ export const findPendingPullRequestReview = (options: {
 
   const since = options.pullRequest.lastReviewedAtMs ?? 0
   const triggerLabelPresent = options.feedback.labels.some((label) => label.toLowerCase() === reviewTriggerLabel)
+  const isRelevantFeedback = isRelevantEntry(options.feedback.authorLogin)
   const unresolvedThreads = options.feedback.reviewThreads
-    .map(stripBotOnlyThread)
+    .map((thread) => stripRelevantThreadComments(thread, options.feedback.authorLogin))
     .filter((thread): thread is PullRequestReviewThread => thread !== null)
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
-  const recentComments = options.feedback.comments.filter((comment) => !comment.isBot && comment.createdAtMs > since)
+  const recentUnresolvedThreads = unresolvedThreads.filter((thread) =>
+    thread.comments.some((comment) => comment.createdAtMs > since))
+  const recentComments = options.feedback.comments.filter(
+    (comment) => comment.createdAtMs > since && isRelevantFeedback(comment),
+  )
   const recentReviews = options.feedback.reviews.filter(
-    (review) => !review.isBot && review.body.trim().length > 0 && review.createdAtMs > since,
+    (review) => review.body.trim().length > 0 && review.createdAtMs > since && isRelevantFeedback(review),
   )
   const mentionTriggered = hasMentionTrigger({
     comments: recentComments,
     reviews: recentReviews,
-    threads: unresolvedThreads,
+    threads: recentUnresolvedThreads,
     since,
   })
+  const feedbackPresent = (triggerLabelPresent ? unresolvedThreads : recentUnresolvedThreads).length > 0
+    || recentComments.length > 0
+    || recentReviews.length > 0
 
-  if (!triggerLabelPresent && !mentionTriggered) {
+  if (!feedbackPresent) {
     return null
   }
 
-  if (unresolvedThreads.length === 0 && recentComments.length === 0 && recentReviews.length === 0) {
-    return null
-  }
+  const trigger = triggerLabelPresent ? "label" : mentionTriggered ? "mention" : "feedback"
 
   const latestFeedbackAtMs = Math.max(
     0,
@@ -63,12 +69,13 @@ export const findPendingPullRequestReview = (options: {
     feedbackMarkdown: renderReviewFeedbackMarkdown({
       comments: recentComments,
       reviews: recentReviews,
+      trigger,
       triggerLabelPresent,
-      unresolvedThreads,
+      unresolvedThreads: triggerLabelPresent ? unresolvedThreads : recentUnresolvedThreads,
     }),
     latestFeedbackAtMs,
     pullRequest: options.pullRequest,
-    trigger: triggerLabelPresent ? "label" : "mention",
+    trigger,
     triggerLabelPresent,
   }
 }
@@ -79,15 +86,19 @@ const hasMentionTrigger = (options: {
   readonly since: number
   readonly threads: ReadonlyArray<PullRequestReviewThread>
 }) =>
-  options.comments.some((comment) => comment.createdAtMs > options.since && containsOrcaMention(comment.body))
-  || options.reviews.some((review) => review.createdAtMs > options.since && containsOrcaMention(review.body))
+  options.comments.some((comment) => containsOrcaMention(comment.body))
+  || options.reviews.some((review) => containsOrcaMention(review.body))
   || options.threads.some((thread) =>
     thread.comments.some((comment) => comment.createdAtMs > options.since && containsOrcaMention(comment.body)))
 
 const containsOrcaMention = (body: string) => /(^|\W)@orca\b/i.test(body)
 
-const stripBotOnlyThread = (thread: PullRequestReviewThread): PullRequestReviewThread | null => {
-  const comments = thread.comments.filter((comment) => !comment.isBot)
+const isRelevantEntry = (authorLogin: string) =>
+  (entry: { readonly authorLogin: string; readonly body: string; readonly isBot: boolean }) =>
+    !entry.isBot && (entry.authorLogin !== authorLogin || containsOrcaMention(entry.body))
+
+const stripRelevantThreadComments = (thread: PullRequestReviewThread, authorLogin: string): PullRequestReviewThread | null => {
+  const comments = thread.comments.filter(isRelevantEntry(authorLogin))
   if (comments.length === 0) {
     return null
   }
@@ -100,13 +111,14 @@ const stripBotOnlyThread = (thread: PullRequestReviewThread): PullRequestReviewT
 const renderReviewFeedbackMarkdown = (options: {
   readonly comments: ReadonlyArray<PullRequestComment>
   readonly reviews: ReadonlyArray<PullRequestReview>
+  readonly trigger: PendingPullRequestReview["trigger"]
   readonly triggerLabelPresent: boolean
   readonly unresolvedThreads: ReadonlyArray<PullRequestReviewThread>
 }) => {
   const sections = [
     "# PR feedback",
     "",
-    `Trigger: ${options.triggerLabelPresent ? `label \`${reviewTriggerLabel}\`` : "recent `@orca` mention"}`,
+    `Trigger: ${renderTrigger(options.trigger)}`,
   ]
 
   if (options.unresolvedThreads.length > 0) {
@@ -131,6 +143,17 @@ const renderReviewFeedbackMarkdown = (options: {
   }
 
   return sections.join("\n")
+}
+
+const renderTrigger = (trigger: PendingPullRequestReview["trigger"]) => {
+  switch (trigger) {
+    case "label":
+      return `label \`${reviewTriggerLabel}\``
+    case "mention":
+      return "recent `@orca` mention"
+    case "feedback":
+      return "recent reviewer feedback"
+  }
 }
 
 const renderReviewThread = (thread: PullRequestReviewThread) =>

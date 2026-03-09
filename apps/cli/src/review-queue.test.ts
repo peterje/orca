@@ -28,16 +28,127 @@ describe("review queue", () => {
       feedback: feedback({
         reviewThreads: [
           {
-            comments: [reviewComment({ body: "Please rename this helper.", createdAtMs: 10 })],
+            comments: [reviewComment({ authorLogin: "author", body: "Please rename this helper.", createdAtMs: 10 })],
             isCollapsed: false,
             isResolved: false,
           },
         ],
+        authorLogin: "author",
       }),
       pullRequest: pullRequest({ lastReviewedAtMs: null }),
     })
 
     expect(pending).toBeNull()
+  })
+
+  it("selects recent reviewer feedback without a manual trigger", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [
+          comment({ authorLogin: "author", body: "@greptileai", createdAtMs: 20 }),
+          comment({ authorLogin: "greptile-apps", body: "Please avoid failing the run for a missing issue URL.", createdAtMs: 50 }),
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please avoid failing the run for a missing issue URL.")
+    expect(pending?.feedbackMarkdown).not.toContain("@greptileai")
+  })
+
+  it("ignores bot activity when detecting automatic feedback", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [comment({ authorLogin: "github-actions[bot]", body: "All checks passed.", createdAtMs: 50, isBot: true })],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "renovate[bot]", body: "@orca please update this snapshot.", createdAtMs: 60, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "coderabbit[bot]", body: "Looks good to me.", createdAtMs: 70, isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).toBeNull()
+  })
+
+  it("does not let bot mentions outrank human feedback", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [
+          comment({ authorLogin: "github-actions[bot]", body: "@orca all checks passed.", createdAtMs: 40, isBot: true }),
+          comment({ authorLogin: "reviewer", body: "Please rerun this after the rename.", createdAtMs: 50 }),
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rerun this after the rename.")
+    expect(pending?.feedbackMarkdown).not.toContain("@orca all checks passed.")
+  })
+
+  it("keeps author @orca mentions as explicit review requests", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [comment({ authorLogin: "author", body: "@orca can you take another look?", createdAtMs: 50 })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 10 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("mention")
+    expect(pending?.feedbackMarkdown).toContain("@orca can you take another look?")
+  })
+
+  it("ignores unresolved reviewer threads that predate the last review", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 10 })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 50 }),
+    })
+
+    expect(pending).toBeNull()
+  })
+
+  it("omits old unresolved threads from feedback-triggered markdown", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        authorLogin: "author",
+        comments: [comment({ authorLogin: "reviewer", body: "Please rerun this after the rename.", createdAtMs: 60 })],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 10 })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 50 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.trigger).toBe("feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rerun this after the rename.")
+    expect(pending?.feedbackMarkdown).not.toContain("Please rename this helper.")
   })
 
   it("selects recent @orca mentions from general comments", () => {
@@ -71,6 +182,7 @@ const pullRequest = (overrides?: Partial<{
 })
 
 const feedback = (overrides?: Partial<PullRequestFeedback>): PullRequestFeedback => ({
+  authorLogin: overrides?.authorLogin ?? "author",
   comments: overrides?.comments ?? [],
   isDraft: true,
   labels: overrides?.labels ?? [],
@@ -86,6 +198,14 @@ const comment = (overrides?: Partial<PullRequestFeedback["comments"][number]>) =
   body: overrides?.body ?? "Comment",
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "comment-1",
+  isBot: overrides?.isBot ?? false,
+})
+
+const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => ({
+  authorLogin: overrides?.authorLogin ?? "reviewer",
+  body: overrides?.body ?? "Review",
+  createdAtMs: overrides?.createdAtMs ?? 1,
+  id: overrides?.id ?? "review-1",
   isBot: overrides?.isBot ?? false,
 })
 
