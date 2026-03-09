@@ -1,6 +1,6 @@
 import { Console, Effect } from "effect"
 import { Command } from "effect/unstable/cli"
-import { resolveOrcaDirectory } from "../kvs.ts"
+import { resolveOrcaDirectory } from "../orca-directory.ts"
 import { Linear } from "../linear.ts"
 
 const commandLinearAuth = Command.make(

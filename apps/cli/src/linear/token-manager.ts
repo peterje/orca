@@ -149,7 +149,7 @@ export const TokenManagerLive = Layer.effect(
         url.searchParams.set("client_id", resolveLinearClientId())
         url.searchParams.set("redirect_uri", linearRedirectUri)
         url.searchParams.set("response_type", "code")
-        url.searchParams.set("scope", "read")
+        url.searchParams.set("scope", "read,write")
         url.searchParams.set("code_challenge", challenge)
         url.searchParams.set("code_challenge_method", "S256")
 

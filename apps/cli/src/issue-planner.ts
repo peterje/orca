@@ -19,9 +19,12 @@ export type IssuePlan = {
   readonly work: ReadonlyArray<PlannedIssue>
 }
 
-export const planIssues = (issues: ReadonlyArray<LinearIssue>): IssuePlan => {
+export const planIssues = (
+  issues: ReadonlyArray<LinearIssue>,
+  options?: { readonly linearLabel?: string | undefined },
+): IssuePlan => {
   const issuesById = new Map(issues.map((issue) => [issue.id, issue]))
-  const directIssues = issues.filter((issue) => issue.isOrcaTagged)
+  const directIssues = issues.filter((issue) => isTaggedIssue(issue, options?.linearLabel))
   const workIds = new Set<string>()
   const inheritedFrom = new Map<string, Set<string>>()
 
@@ -78,9 +81,10 @@ export const planIssues = (issues: ReadonlyArray<LinearIssue>): IssuePlan => {
           )
           .sort(compareBlockingRelations),
         effectivePriority: issue.isOrcaTagged
+          || isTaggedIssue(issue, options?.linearLabel)
           ? issue.priority
           : deriveInheritedPriority(rootIssues),
-        includedBecause: issue.isOrcaTagged ? "direct" : "inherited",
+        includedBecause: issue.isOrcaTagged || isTaggedIssue(issue, options?.linearLabel) ? "direct" : "inherited",
         inheritedFrom: rootIssues.map((rootIssue) => rootIssue.identifier),
         get blockingIssues() {
           return this.blocking.map((relation) => relation.issue)
@@ -136,4 +140,74 @@ export const formatPriority = (priority: number) => {
     default:
       return "None"
   }
+}
+
+export const renderDependencyGraph = (work: ReadonlyArray<PlannedIssue>): Array<string> => {
+  const workById = new Map(work.map((issue) => [issue.id, issue]))
+  const order = new Map(work.map((issue, index) => [issue.id, index]))
+  const roots = work.filter((issue) => issue.includedBecause === "direct")
+
+  return roots.flatMap((issue, index) => {
+    const lines = renderIssueTree(issue, workById, order, "", true, new Set())
+    return index === 0 ? lines : ["", ...lines]
+  })
+}
+
+const isTaggedIssue = (issue: LinearIssue, linearLabel = "Orca") =>
+  issue.labels.some((label) => label.toLowerCase() === linearLabel.toLowerCase()) ||
+  (linearLabel.toLowerCase() === "orca" && issue.isOrcaTagged)
+
+const renderIssueTree = (
+  issue: PlannedIssue,
+  workById: Map<string, PlannedIssue>,
+  order: Map<string, number>,
+  prefix: string,
+  isRoot: boolean,
+  path: Set<string>,
+): Array<string> => {
+  const lines = [`${isRoot ? "- " : prefix}${formatGraphIssue(issue)}`]
+  const nextPath = new Set(path).add(issue.id)
+  const blocking = issue.blocking
+    .map((relation) => ({
+      issue: workById.get(relation.issue.id),
+      kind: relation.kind,
+    }))
+    .filter(
+      (relation): relation is { issue: PlannedIssue; kind: "dependency" | "subissue" } =>
+        relation.issue !== undefined,
+    )
+    .sort((left, right) => (order.get(left.issue.id) ?? 0) - (order.get(right.issue.id) ?? 0))
+
+  for (let index = 0; index < blocking.length; index += 1) {
+    const relation = blocking[index]!
+    const isLast = index === blocking.length - 1
+    const connector = isLast ? "\\- " : "|- "
+    const basePrefix = isRoot ? "   " : prefix
+    const childPrefix = `${basePrefix}${isLast ? "   " : "|  "}`
+
+    lines.push(`${basePrefix}${connector}${relation.kind}: ${formatGraphIssue(relation.issue)}`)
+
+    if (!nextPath.has(relation.issue.id) && relation.issue.blocking.length > 0) {
+      const nestedLines = renderIssueTree(
+        relation.issue,
+        workById,
+        order,
+        childPrefix,
+        false,
+        nextPath,
+      )
+      lines.push(...nestedLines.slice(1))
+    }
+  }
+
+  return lines
+}
+
+const formatGraphIssue = (issue: PlannedIssue) => {
+  const status = issue.blocking.length === 0 ? "actionable" : "blocked"
+  const source =
+    issue.includedBecause === "direct"
+      ? "direct"
+      : `inherits ${issue.inheritedFrom.join(", ")}`
+  return `${issue.identifier} ${issue.title} [${status}, priority: ${formatPriority(issue.effectivePriority)}, ${source}]`
 }

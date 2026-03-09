@@ -1,11 +1,7 @@
 import { Effect, Layer, Path } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
+import { resolveOrcaDirectory } from "./orca-directory.ts"
 import { PlatformServices } from "./shared/platform.ts"
-
-export const resolveOrcaDirectory = Effect.fn("resolveOrcaDirectory")(function* () {
-  const path = yield* Path.Path
-  return path.join(process.cwd(), ".orca")
-})
 
 export const layerKvs = Layer.unwrap(
   Effect.gen(function* () {

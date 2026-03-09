@@ -98,6 +98,7 @@ const makeGraphqlClient = (options?: { readonly mode?: "success" | "error" }) =>
                         childNode("child-done", "ENG-8", "completed"),
                       ],
                     },
+                    description: "Direct issue description",
                     labels: { nodes: [{ id: "label-1", name: "oRcA" }] },
                     priority: 2,
                     title: "Direct Orca issue",
@@ -204,6 +205,7 @@ const linearNode = (overrides: Partial<GraphqlIssueNode>): GraphqlIssueNode => (
 const baseLinearNode = () => ({
   children: { nodes: [] as Array<ReturnType<typeof childNode>> },
   createdAt: "2026-03-01T00:00:00.000Z",
+  description: null as null | string,
   id: "issue-1",
   identifier: "ENG-0",
   inverseRelations: { nodes: [] as Array<ReturnType<typeof relation>> },
@@ -214,6 +216,22 @@ const baseLinearNode = () => ({
     id: "state-1",
     name: "Unstarted",
     type: "unstarted",
+  },
+  team: {
+    states: {
+      nodes: [
+        {
+          id: "state-backlog",
+          name: "Backlog",
+          type: "backlog",
+        },
+        {
+          id: "state-started",
+          name: "In Progress",
+          type: "started",
+        },
+      ],
+    },
   },
   title: "Issue",
 })

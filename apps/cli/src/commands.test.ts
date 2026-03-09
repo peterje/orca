@@ -7,6 +7,8 @@ import { commandIssues } from "./commands/issues.ts"
 import { commandRoot } from "./commands/root.ts"
 import { commandServe } from "./commands/serve.ts"
 import { Linear, type LinearIssue } from "./linear.ts"
+import { RunState, type ActiveRun } from "./run-state.ts"
+import { Runner } from "./runner.ts"
 
 describe("CLI commands", () => {
   it.effect("renders the issues list with actionable and blocked sections", () =>
@@ -210,6 +212,21 @@ const cliEnvironmentLayer = Layer.mergeAll(
   FileSystem.layerNoop({}),
   Path.layer,
   Layer.succeed(
+    RunState,
+    RunState.of({
+      acquire: () => Effect.die("not used in this test"),
+      clear: Effect.void,
+      current: Effect.succeed(null as ActiveRun | null),
+      update: () => Effect.succeed(null as ActiveRun | null),
+    }),
+  ),
+  Layer.succeed(
+    Runner,
+    Runner.of({
+      runNext: Effect.die("not used in this test"),
+    }),
+  ),
+  Layer.succeed(
     Terminal.Terminal,
     Terminal.make({
       columns: Effect.succeed(80),
@@ -230,7 +247,9 @@ const fixedLinearLayer = (issues: ReadonlyArray<LinearIssue>) =>
     Linear,
     Linear.of({
       authenticate: Effect.die("not used in this test"),
+      commentOnIssue: () => Effect.die("not used in this test"),
       issues: Effect.succeed(issues),
+      markIssueInProgress: () => Effect.die("not used in this test"),
       viewer: Effect.die("not used in this test"),
     }),
   )
@@ -243,7 +262,9 @@ const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<LinearIssu
 
       return Linear.of({
         authenticate: Effect.die("not used in this test"),
+        commentOnIssue: () => Effect.die("not used in this test"),
         issues: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? [], current + 1]),
+        markIssueInProgress: () => Effect.die("not used in this test"),
         viewer: Effect.die("not used in this test"),
       })
     }),
@@ -253,12 +274,16 @@ const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "ident
   blockedBy: overrides.blockedBy ?? [],
   childIds: overrides.childIds ?? [],
   createdAtMs: overrides.createdAtMs ?? Date.parse("2026-01-01T00:00:00.000Z"),
+  description: overrides.description ?? "",
   id: overrides.id,
   identifier: overrides.identifier,
   isOrcaTagged: overrides.isOrcaTagged ?? false,
   labels: overrides.labels ?? [],
   parentId: overrides.parentId ?? null,
   priority: overrides.priority ?? 0,
+  stateId: overrides.stateId ?? `${overrides.id}-state`,
+  stateName: overrides.stateName ?? "Unstarted",
   state: overrides.state ?? "unstarted",
+  teamStates: overrides.teamStates ?? [],
   title: overrides.title,
 })

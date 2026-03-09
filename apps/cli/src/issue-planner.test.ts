@@ -157,6 +157,24 @@ describe("planIssues", () => {
       expect(plan.blocked[0]?.blockingIssues.map((issue) => issue.identifier)).toEqual(["ENG-41"])
     }))
 
+  it.effect("supports a configurable label for direct Orca work", () =>
+    Effect.sync(() => {
+      const plan = planIssues(
+        [
+          issue({
+            id: "custom-1",
+            identifier: "ENG-60",
+            labels: ["Autowrite"],
+            title: "Custom labeled work",
+          }),
+        ],
+        { linearLabel: "Autowrite" },
+      )
+
+      expect(plan.actionable.map((issue) => issue.identifier)).toEqual(["ENG-60"])
+      expect(plan.actionable[0]?.includedBecause).toBe("direct")
+    }))
+
   it.effect("recursively expands blockers of inherited subissues", () =>
     Effect.sync(() => {
       const plan = planIssues([
@@ -194,12 +212,16 @@ const issue = (
   blockedBy: overrides.blockedBy ?? [],
   childIds: overrides.childIds ?? [],
   createdAtMs: overrides.createdAtMs ?? Date.parse("2026-01-01T00:00:00.000Z"),
+  description: overrides.description ?? "",
   id: overrides.id,
   identifier: overrides.identifier,
   isOrcaTagged: overrides.isOrcaTagged ?? false,
   labels: overrides.labels ?? [],
   parentId: overrides.parentId ?? null,
   priority: overrides.priority ?? 0,
+  stateId: overrides.stateId ?? `${overrides.id}-state`,
+  stateName: overrides.stateName ?? "Unstarted",
   state: overrides.state ?? "unstarted",
+  teamStates: overrides.teamStates ?? [],
   title: overrides.title,
 })

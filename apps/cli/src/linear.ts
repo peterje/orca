@@ -11,19 +11,34 @@ export type LinearIssue = {
   readonly blockedBy: ReadonlyArray<string>
   readonly childIds: ReadonlyArray<string>
   readonly createdAtMs: number
+  readonly description: string
   readonly id: string
   readonly identifier: string
   readonly isOrcaTagged: boolean
   readonly labels: ReadonlyArray<string>
   readonly parentId: string | null
   readonly priority: number
+  readonly stateId: string
+  readonly stateName: string
   readonly state: string
+  readonly teamStates: ReadonlyArray<LinearWorkflowState>
   readonly title: string
+}
+
+export type LinearWorkflowState = {
+  readonly id: string
+  readonly name: string
+  readonly type: string
 }
 
 export type LinearService = {
   authenticate: Effect.Effect<LinearViewer, LinearApiError | LinearOAuthError>
+  commentOnIssue: (options: {
+    readonly body: string
+    readonly issueId: string
+  }) => Effect.Effect<void, LinearApiError | LinearAuthRequiredError>
   issues: Effect.Effect<ReadonlyArray<LinearIssue>, LinearApiError | LinearAuthRequiredError>
+  markIssueInProgress: (issue: LinearIssue) => Effect.Effect<void, LinearApiError | LinearAuthRequiredError>
   viewer: Effect.Effect<LinearViewer, LinearApiError | LinearAuthRequiredError>
 }
 
@@ -54,6 +69,12 @@ export const LinearLive = Layer.effect(
       })
 
     const viewer = gql(ViewerData, viewerQuery).pipe(Effect.map((data) => data.viewer))
+
+    const mutation = <A, I, RD, RE>(
+      schema: Schema.Codec<A, I, RD, RE>,
+      query: string,
+      variables?: Record<string, unknown>,
+    ) => gql(schema, query, variables)
 
     const authenticate = tokenManager.authenticate.pipe(
       Effect.flatMap((tokens) =>
@@ -133,7 +154,31 @@ export const LinearLive = Layer.effect(
       return mapLinearIssues(collected).sort(compareLinearIssues)
     })
 
-    return Linear.of({ authenticate, issues, viewer })
+    const commentOnIssue = (options: {
+      readonly body: string
+      readonly issueId: string
+    }) =>
+      mutation(CommentCreatePayload, commentCreateMutation, {
+        body: options.body,
+        issueId: options.issueId,
+      }).pipe(Effect.asVoid)
+
+    const markIssueInProgress = (issue: LinearIssue) => {
+      const nextState = issue.teamStates.find(
+        (state) => state.type.toLowerCase() === "started" || state.name.toLowerCase() === "in progress",
+      )
+
+      if (!nextState || nextState.id === issue.stateId) {
+        return Effect.void
+      }
+
+      return mutation(IssueUpdatePayload, issueUpdateMutation, {
+        id: issue.id,
+        stateId: nextState.id,
+      }).pipe(Effect.asVoid)
+    }
+
+    return Linear.of({ authenticate, commentOnIssue, issues, markIssueInProgress, viewer })
   }),
 )
 
@@ -163,6 +208,10 @@ const IssueState = Schema.Struct({
   type: Schema.String,
 })
 
+const TeamStates = Schema.Struct({
+  nodes: Schema.Array(IssueState),
+})
+
 const LabelNode = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -188,6 +237,7 @@ const LinearIssueNode = Schema.Struct({
     ),
   }),
   createdAt: Schema.String,
+  description: Schema.NullOr(Schema.String),
   id: Schema.String,
   identifier: Schema.String,
   inverseRelations: Schema.Struct({
@@ -204,7 +254,22 @@ const LinearIssueNode = Schema.Struct({
   ),
   priority: Schema.Number,
   state: IssueState,
+  team: Schema.Struct({
+    states: TeamStates,
+  }),
   title: Schema.String,
+})
+
+const CommentCreatePayload = Schema.Struct({
+  commentCreate: Schema.Struct({
+    success: Schema.Boolean,
+  }),
+})
+
+const IssueUpdatePayload = Schema.Struct({
+  issueUpdate: Schema.Struct({
+    success: Schema.Boolean,
+  }),
 })
 
 const IssuesPageData = Schema.Struct({
@@ -240,6 +305,7 @@ const mapLinearIssues = (
       .filter((child) => !isTerminalState(child.state.type))
       .map((child) => child.id),
     createdAtMs: Date.parse(issue.createdAt),
+    description: issue.description ?? "",
     id: issue.id,
     identifier: issue.identifier,
     isOrcaTagged: issue.labels.nodes.some(
@@ -248,7 +314,14 @@ const mapLinearIssues = (
     labels: issue.labels.nodes.map((label) => label.name),
     parentId: issue.parent?.id ?? null,
     priority: issue.priority,
+    stateId: issue.state.id,
+    stateName: issue.state.name,
     state: issue.state.type,
+    teamStates: issue.team.states.nodes.map((state) => ({
+      id: state.id,
+      name: state.name,
+      type: state.type,
+    })),
     title: issue.title,
   }))
 
@@ -284,6 +357,7 @@ const issuesQuery = `query OrcaIssues($after: String) {
       id
       identifier
       title
+      description
       priority
       createdAt
       parent {
@@ -306,6 +380,15 @@ const issuesQuery = `query OrcaIssues($after: String) {
         name
         type
       }
+      team {
+        states(first: 50) {
+          nodes {
+            id
+            name
+            type
+          }
+        }
+      }
       labels {
         nodes {
           id
@@ -327,5 +410,17 @@ const issuesQuery = `query OrcaIssues($after: String) {
         }
       }
     }
+  }
+}`
+
+const issueUpdateMutation = `mutation OrcaIssueUpdate($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) {
+    success
+  }
+}`
+
+const commentCreateMutation = `mutation OrcaCommentCreate($issueId: String!, $body: String!) {
+  commentCreate(input: { issueId: $issueId, body: $body }) {
+    success
   }
 }`
