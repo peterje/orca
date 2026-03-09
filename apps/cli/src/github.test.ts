@@ -211,16 +211,58 @@ describe("GitHub", () => {
         repo: "peterje/orca",
       })
 
-      expect(commands).toContainEqual({
-        args: ["pr", "ready", "42", "--repo", "peterje/orca"],
-        command: "gh",
-      })
+      expect(commands.filter((command) => command.args[0] === "pr")).toEqual([
+        {
+          args: ["pr", "view", "42", "--repo", "peterje/orca", "--json", "isDraft", "-q", ".isDraft"],
+          command: "gh",
+        },
+        {
+          args: ["pr", "ready", "42", "--repo", "peterje/orca"],
+          command: "gh",
+        },
+      ])
     }).pipe(
       Effect.provide(
         makeGitHubLayer({
           onCommand: (command) => {
             commands.push(command)
           },
+          stdout: (command) =>
+            command.args[1] === "view"
+              ? "true\n"
+              : "",
+        }),
+      ),
+    )
+  })
+
+  it.effect("treats already-ready pull requests as a no-op", () => {
+    const commands: Array<CommandInvocation> = []
+
+    return Effect.gen(function* () {
+      const github = yield* GitHub
+
+      yield* github.markPullRequestReadyForReview({
+        pullRequestNumber: 42,
+        repo: "peterje/orca",
+      })
+
+      expect(commands.filter((command) => command.args[0] === "pr")).toEqual([
+        {
+          args: ["pr", "view", "42", "--repo", "peterje/orca", "--json", "isDraft", "-q", ".isDraft"],
+          command: "gh",
+        },
+      ])
+    }).pipe(
+      Effect.provide(
+        makeGitHubLayer({
+          onCommand: (command) => {
+            commands.push(command)
+          },
+          stdout: (command) =>
+            command.args[1] === "view"
+              ? "false\n"
+              : "",
         }),
       ),
     )

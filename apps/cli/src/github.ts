@@ -209,6 +209,53 @@ export const GitHubLive = Effect.gen(function* () {
             })),
     )
 
+  const readPullRequestDraftState = (options: {
+    readonly pullRequestNumber: number
+    readonly repo: string
+  }) =>
+    ChildProcess.make(
+      "gh",
+      [
+        "pr",
+        "view",
+        String(options.pullRequestNumber),
+        "--repo",
+        options.repo,
+        "--json",
+        "isDraft",
+        "-q",
+        ".isDraft",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    ).pipe(
+      spawner.string,
+      Effect.map((value) => value.trim().toLowerCase()),
+      Effect.flatMap((value) => {
+        switch (value) {
+          case "false":
+            return Effect.succeed(false)
+          case "true":
+            return Effect.succeed(true)
+          default:
+            return Effect.fail(
+              new GitHubError({
+                message: `Failed to inspect draft state for pull request #${options.pullRequestNumber}.`,
+              }),
+            )
+        }
+      }),
+      Effect.mapError((cause) =>
+        cause instanceof GitHubError
+          ? cause
+          : new GitHubError({
+              message: `Failed to inspect draft state for pull request #${options.pullRequestNumber}.`,
+              cause,
+            })),
+    )
+
   const readPullRequestFeedback = (options: {
     readonly pullRequestNumber: number
     readonly repo: string
@@ -283,27 +330,34 @@ export const GitHubLive = Effect.gen(function* () {
     readonly pullRequestNumber: number
     readonly repo: string
   }) =>
-    ChildProcess.make(
-      "gh",
-      ["pr", "ready", String(options.pullRequestNumber), "--repo", options.repo],
-      {
-        stderr: "pipe",
-        stdout: "pipe",
-      },
-    ).pipe(
-      spawner.exitCode,
-      Effect.flatMap((exitCode) =>
-        exitCode === 0
-          ? Effect.void
-          : Effect.fail(new GitHubError({ message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.` }))),
-      Effect.mapError((cause) =>
-        cause instanceof GitHubError
-          ? cause
-          : new GitHubError({
-              message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.`,
-              cause,
-            })),
-    )
+    Effect.gen(function* () {
+      const isDraft = yield* readPullRequestDraftState(options)
+      if (!isDraft) {
+        return
+      }
+
+      const exitCode = yield* ChildProcess.make(
+        "gh",
+        ["pr", "ready", String(options.pullRequestNumber), "--repo", options.repo],
+        {
+          stderr: "pipe",
+          stdout: "pipe",
+        },
+      ).pipe(
+        spawner.exitCode,
+        Effect.mapError((cause) =>
+          cause instanceof GitHubError
+            ? cause
+            : new GitHubError({
+                message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.`,
+                cause,
+              })),
+      )
+
+      if (exitCode !== 0) {
+        return yield* Effect.fail(new GitHubError({ message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.` }))
+      }
+    })
 
   return GitHub.of({
     createPullRequest,

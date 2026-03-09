@@ -320,6 +320,50 @@ describe("Runner", () => {
     )
   })
 
+  it.effect("removes waiting pull requests that were merged or closed outside Orca during polling", () => {
+    const removedPullRequests: Array<string> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        yield* runner.pollWaitingPullRequests
+
+        expect(removedPullRequests).toEqual(["peterje/orca#41", "peterje/orca#42"])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [
+          issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Closed work" }),
+          issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "Merged work" }),
+          issue({ id: "issue-3", identifier: "ENG-3", isOrcaTagged: true, title: "Fresh work" }),
+        ],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#41": pullRequestFeedback({ number: 41, state: "CLOSED", url: "https://github.com/peterje/orca/pull/41" }),
+          "peterje/orca#42": pullRequestFeedback({ number: 42, state: "MERGED", url: "https://github.com/peterje/orca/pull/42" }),
+        },
+        removedPullRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Closed work",
+            prNumber: 41,
+            prUrl: "https://github.com/peterje/orca/pull/41",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+          trackedPullRequest({
+            issueId: "issue-2",
+            issueIdentifier: "ENG-2",
+            issueTitle: "Merged work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 2,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
   it.effect("reads waiting pull request feedback once during runNext selection", () => {
     const readPullRequestFeedbackRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
 

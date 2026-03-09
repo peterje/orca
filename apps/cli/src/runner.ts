@@ -119,6 +119,10 @@ export const RunnerLive = Effect.gen(function* () {
             repo: pullRequest.repo,
           }).pipe(Effect.mapError(toRunnerFailure))
           if (feedback.state.toUpperCase() !== "OPEN") {
+            yield* pullRequestStore.remove({
+              prNumber: pullRequest.prNumber,
+              repo: pullRequest.repo,
+            }).pipe(Effect.mapError(toRunnerFailure))
             return
           }
 
