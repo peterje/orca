@@ -1,6 +1,6 @@
 import { Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
 import { AgentRunner, AgentRunnerError, AgentRunnerStalledError, AgentRunnerTimeoutError } from "./agent-runner.ts"
-import { GitHub, GitHubError, type GitHubService, type PullRequestInfo } from "./github.ts"
+import { GitHub, GitHubError, type GitHubService, type PullRequestFeedback, type PullRequestInfo } from "./github.ts"
 import { planIssues, type IssuePlan, type PlannedIssue } from "./issue-planner.ts"
 import { Linear, type LinearService } from "./linear.ts"
 import { PromptGen, PromptGenError } from "./prompt-gen.ts"
@@ -34,7 +34,19 @@ export type RunnerWorkItem =
       readonly title: string
     }
 
+export type RunnerQueueStatus =
+  | RunnerWorkItem
+  | {
+      readonly kind: "idle"
+    }
+  | {
+      readonly kind: "paused"
+      readonly maxWaitingGreptilePrs: number
+      readonly waitingGreptilePrCount: number
+    }
+
 export type RunnerService = {
+  readonly peekStatus: Effect.Effect<RunnerQueueStatus, RunnerFailure | RepoConfigError>
   readonly peekNext: Effect.Effect<Option.Option<RunnerWorkItem>, RunnerFailure | RepoConfigError>
   readonly runNext: Effect.Effect<RunnerResult, RunnerFailure | RunnerNoWorkError | RepoConfigError | RunStateBusyError>
 }
@@ -55,6 +67,20 @@ type SelectedWork =
       readonly kind: "review"
       readonly review: PendingPullRequestReview
     }
+  | {
+      readonly kind: "idle"
+    }
+  | {
+      readonly kind: "paused"
+      readonly maxWaitingGreptilePrs: number
+      readonly waitingGreptilePrCount: number
+    }
+
+type StoredPullRequestStatus = {
+  readonly feedback: PullRequestFeedback
+  readonly pendingReview: PendingPullRequestReview | null
+  readonly pullRequest: OrcaManagedPullRequest
+}
 
 export const RunnerLive = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -68,91 +94,114 @@ export const RunnerLive = Effect.gen(function* () {
   const verifier = yield* Verifier
   const worktree = yield* Worktree
 
-  const selectNextWork = Effect.gen(function* () {
-    const config = yield* repoConfig.read
-    const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
-    const reviewCandidates = yield* Effect.forEach(
+  const readStoredPullRequestStatuses = (storedPullRequests: ReadonlyArray<OrcaManagedPullRequest>) =>
+    Effect.forEach(
       storedPullRequests,
       (pullRequest) =>
         github.readPullRequestFeedback({
           pullRequestNumber: pullRequest.prNumber,
           repo: pullRequest.repo,
         }).pipe(
-          Effect.map((feedback) => findPendingPullRequestReview({ feedback, pullRequest })),
+          Effect.map((feedback): StoredPullRequestStatus => ({
+            feedback,
+            pendingReview: findPendingPullRequestReview({ feedback, pullRequest }),
+            pullRequest,
+          })),
           Effect.mapError(toRunnerFailure),
         ),
       { concurrency: 1 },
     )
 
-    const review = reviewCandidates
-      .filter((candidate): candidate is PendingPullRequestReview => candidate !== null)
+  const selectNextWork: Effect.Effect<SelectedWork, RunnerFailure | RepoConfigError> = Effect.gen(function* () {
+    const config = yield* repoConfig.read
+    const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
+    const storedPullRequestStatuses = yield* readStoredPullRequestStatuses(storedPullRequests)
+
+    const review = storedPullRequestStatuses
+      .flatMap((candidate) => (candidate.pendingReview === null ? [] : [candidate.pendingReview]))
       .sort(comparePendingReviews)[0]
 
     if (review) {
-      return Option.some({ config, kind: "review", review } satisfies SelectedWork)
+      return { config, kind: "review", review } satisfies SelectedWork
     }
 
     const issues = yield* linear.issues.pipe(Effect.mapError(toRunnerFailure))
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
     const issue = plan.actionable[0]
     if (!issue) {
-      return Option.none<SelectedWork>()
+      return { kind: "idle" } satisfies SelectedWork
     }
 
-    return Option.some({ config, issue, kind: "implementation", plan } satisfies SelectedWork)
+    const waitingGreptilePrCount = countWaitingGreptilePullRequests(storedPullRequestStatuses)
+    if (waitingGreptilePrCount >= config.maxWaitingGreptilePrs) {
+      return {
+        kind: "paused",
+        maxWaitingGreptilePrs: config.maxWaitingGreptilePrs,
+        waitingGreptilePrCount,
+      } satisfies SelectedWork
+    }
+
+    return { config, issue, kind: "implementation", plan } satisfies SelectedWork
   })
 
-  const peekNext = selectNextWork.pipe(
-    Effect.map(
-      Option.map((selected): RunnerWorkItem =>
-        selected.kind === "review"
-          ? {
-              id: `${selected.review.pullRequest.repo}#${selected.review.pullRequest.prNumber}`,
-              issueIdentifier: selected.review.pullRequest.issueIdentifier,
-              kind: "review",
-              pullRequestNumber: selected.review.pullRequest.prNumber,
-              pullRequestUrl: selected.review.pullRequest.prUrl,
-              title: selected.review.pullRequest.issueTitle,
-            }
-          : {
-              id: selected.issue.id,
-              issueIdentifier: selected.issue.identifier,
-              kind: "implementation",
-              title: selected.issue.title,
-            }),
-    ),
+  const peekStatus = selectNextWork.pipe(Effect.map((selected): RunnerQueueStatus => {
+    switch (selected.kind) {
+      case "review":
+        return toRunnerWorkItem(selected)
+      case "implementation":
+        return toRunnerWorkItem(selected)
+      case "paused":
+        return {
+          kind: "paused",
+          maxWaitingGreptilePrs: selected.maxWaitingGreptilePrs,
+          waitingGreptilePrCount: selected.waitingGreptilePrCount,
+        }
+      case "idle":
+        return { kind: "idle" }
+    }
+  }))
+
+  const peekNext = peekStatus.pipe(
+    Effect.map((status) =>
+      status.kind === "review" || status.kind === "implementation"
+        ? Option.some(status)
+        : Option.none<RunnerWorkItem>()),
   )
 
   const runNext = Effect.gen(function* () {
     const selected = yield* selectNextWork
-    if (Option.isNone(selected)) {
+    if (selected.kind === "idle") {
       return yield* Effect.fail(
         new RunnerNoWorkError({ message: "No pending pull request reviews or actionable Orca issues are currently available." }),
       )
     }
 
-    return yield* (selected.value.kind === "review"
+    if (selected.kind === "paused") {
+      return yield* Effect.fail(new RunnerNoWorkError({ message: makeWaitingGreptileCapMessage(selected) }))
+    }
+
+    return yield* (selected.kind === "review"
       ? runReview({
           agentRunner,
-          config: selected.value.config,
+          config: selected.config,
           fs,
           github,
           linear,
           promptGen,
           pullRequestStore,
-          review: selected.value.review,
+          review: selected.review,
           runState,
           verifier,
           worktree,
         })
       : runImplementation({
           agentRunner,
-          config: selected.value.config,
+          config: selected.config,
           fs,
           github,
-          issue: selected.value.issue,
+          issue: selected.issue,
           linear,
-          plan: selected.value.plan,
+          plan: selected.plan,
           promptGen,
           pullRequestStore,
           runState,
@@ -161,7 +210,7 @@ export const RunnerLive = Effect.gen(function* () {
         }))
   })
 
-  return Runner.of({ peekNext, runNext })
+  return Runner.of({ peekNext, peekStatus, runNext })
 })
 
 export const RunnerLayer = Layer.effect(Runner, RunnerLive)
@@ -531,6 +580,29 @@ const makePullRequestBody = (issueIdentifier: string, verify: ReadonlyArray<stri
 const comparePendingReviews = (left: PendingPullRequestReview, right: PendingPullRequestReview) =>
   right.latestFeedbackAtMs - left.latestFeedbackAtMs
   || left.pullRequest.issueIdentifier.localeCompare(right.pullRequest.issueIdentifier)
+
+const countWaitingGreptilePullRequests = (statuses: ReadonlyArray<StoredPullRequestStatus>) =>
+  statuses.filter((status) => status.feedback.state.toUpperCase() === "OPEN" && status.pendingReview === null).length
+
+const toRunnerWorkItem = (selected: Extract<SelectedWork, { readonly kind: "implementation" | "review" }>): RunnerWorkItem =>
+  selected.kind === "review"
+    ? {
+        id: `${selected.review.pullRequest.repo}#${selected.review.pullRequest.prNumber}`,
+        issueIdentifier: selected.review.pullRequest.issueIdentifier,
+        kind: "review",
+        pullRequestNumber: selected.review.pullRequest.prNumber,
+        pullRequestUrl: selected.review.pullRequest.prUrl,
+        title: selected.review.pullRequest.issueTitle,
+      }
+    : {
+        id: selected.issue.id,
+        issueIdentifier: selected.issue.identifier,
+        kind: "implementation",
+        title: selected.issue.title,
+      }
+
+const makeWaitingGreptileCapMessage = (selected: Extract<SelectedWork, { readonly kind: "paused" }>) =>
+  `Waiting for Greptile on ${selected.waitingGreptilePrCount} open Orca PRs, which meets the configured cap of ${selected.maxWaitingGreptilePrs}. No new implementation PRs will open until review feedback becomes actionable.`
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `"'"'`)}'`
 

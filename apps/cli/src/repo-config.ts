@@ -13,11 +13,14 @@ export class RepoConfigData extends Schema.Class<RepoConfigData>("orca/RepoConfi
   cleanupWorktreeOnSuccess: Schema.Boolean,
   draftPr: Schema.Boolean,
   linearLabel: Schema.String,
+  maxWaitingGreptilePrs: Schema.Number,
   repo: Schema.String,
   setup: Schema.Array(Schema.String),
   stallTimeoutMinutes: Schema.Number,
   verify: Schema.Array(Schema.String),
 }) {}
+
+const defaultMaxWaitingGreptilePrs = 4
 
 export type RepoConfigService = {
   configPath: Effect.Effect<string>
@@ -58,7 +61,7 @@ export const RepoConfigLive = Effect.gen(function* () {
       try: () => JSON.parse(raw),
       catch: (cause) => new RepoConfigError({ message: `Failed to parse ${file} as JSON.`, cause }),
     })
-    return yield* Schema.decodeUnknownEffect(RepoConfigData)(json).pipe(
+    return yield* Schema.decodeUnknownEffect(RepoConfigData)(normalizeRepoConfigJson(json)).pipe(
       Effect.mapError((cause) => new RepoConfigError({ message: `Invalid Orca repo config in ${file}.`, cause })),
     )
   })
@@ -110,6 +113,7 @@ export const RepoConfigLive = Effect.gen(function* () {
         cleanupWorktreeOnSuccess: true,
         draftPr: options?.draftPr ?? true,
         linearLabel: options?.linearLabel ?? "Orca",
+        maxWaitingGreptilePrs: defaultMaxWaitingGreptilePrs,
         repo,
         setup: ["bun install"],
         stallTimeoutMinutes: 10,
@@ -136,6 +140,11 @@ export class RepoConfigError extends Data.TaggedError("RepoConfigError")<{
   readonly message: string
   readonly cause?: unknown
 }> {}
+
+const normalizeRepoConfigJson = (json: unknown) =>
+  typeof json === "object" && json !== null && !Array.isArray(json)
+    ? { maxWaitingGreptilePrs: defaultMaxWaitingGreptilePrs, ...json }
+    : json
 
 const detectRepo = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
   ChildProcess.make("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], {

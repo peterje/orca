@@ -8,7 +8,7 @@ import { commandRoot } from "./commands/root.ts"
 import { commandServe } from "./commands/serve.ts"
 import { Linear, type LinearIssue } from "./linear.ts"
 import { RunState, type ActiveRun } from "./run-state.ts"
-import { Runner } from "./runner.ts"
+import { Runner, type RunnerQueueStatus, type RunnerResult } from "./runner.ts"
 
 describe("CLI commands", () => {
   it.effect("renders the issues list with actionable and blocked sections", () =>
@@ -194,11 +194,11 @@ describe("CLI commands", () => {
           cliEnvironmentLayer,
           TestConsole.layer,
           sequencingRunnerLayer([
-            Option.some({ id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" }),
-            Option.some({ id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" }),
-            Option.some({ id: "issue-2", issueIdentifier: "ENG-2", kind: "implementation", title: "Second issue" }),
-            Option.none(),
-            Option.none(),
+            { id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" },
+            { id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" },
+            { id: "issue-2", issueIdentifier: "ENG-2", kind: "implementation", title: "Second issue" },
+            { kind: "idle" },
+            { kind: "idle" },
           ]),
         ),
       ),
@@ -223,17 +223,88 @@ describe("CLI commands", () => {
           cliEnvironmentLayer,
           TestConsole.layer,
           sequencingRunnerLayer([
-            Option.some({
+            {
               id: "peterje/orca#9",
               issueIdentifier: "ENG-9",
               kind: "review",
               pullRequestNumber: 9,
               pullRequestUrl: "https://github.com/peterje/orca/pull/9",
               title: "Existing PR",
-            }),
-            Option.some({ id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" }),
-            Option.some({ id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" }),
+            },
+            { id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" },
+            { id: "issue-10", issueIdentifier: "ENG-10", kind: "implementation", title: "New issue" },
           ]),
+        ),
+      ),
+    ))
+
+  it.effect("serve reports when the Greptile waiting cap pauses implementation work", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(2_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Waiting for Greptile on 4 open Orca PRs (cap 4); new implementation work is paused until review feedback becomes actionable.",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingRunnerLayer([
+            { kind: "paused", maxWaitingGreptilePrs: 4, waitingGreptilePrCount: 4 },
+            { kind: "paused", maxWaitingGreptilePrs: 4, waitingGreptilePrCount: 4 },
+            { kind: "paused", maxWaitingGreptilePrs: 4, waitingGreptilePrCount: 4 },
+          ]),
+        ),
+      ),
+    ))
+
+  it.effect("serve --execute keeps opening PRs for new implementation work", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--execute", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(3_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Opened PR for ENG-1: https://github.com/peterje/orca/pull/1",
+        "Opened PR for ENG-2: https://github.com/peterje/orca/pull/2",
+        "No actionable Orca work is currently available.",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingRunnerLayer(
+            [
+              { id: "issue-1", issueIdentifier: "ENG-1", kind: "implementation", title: "First issue" },
+              { id: "issue-2", issueIdentifier: "ENG-2", kind: "implementation", title: "Second issue" },
+              { kind: "idle" },
+              { kind: "idle" },
+            ],
+            [
+              {
+                issueIdentifier: "ENG-1",
+                mode: "implementation",
+                pullRequestUrl: "https://github.com/peterje/orca/pull/1",
+                worktreePath: "/tmp/orca-eng-1",
+              },
+              {
+                issueIdentifier: "ENG-2",
+                mode: "implementation",
+                pullRequestUrl: "https://github.com/peterje/orca/pull/2",
+                worktreePath: "/tmp/orca-eng-2",
+              },
+            ],
+          ),
         ),
       ),
     ))
@@ -302,16 +373,30 @@ const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<LinearIssu
   )
 
 const sequencingRunnerLayer = (
-  snapshots: ReadonlyArray<Option.Option<{ readonly id: string; readonly issueIdentifier: string; readonly kind: "implementation"; readonly title: string } | { readonly id: string; readonly issueIdentifier: string; readonly kind: "review"; readonly pullRequestNumber: number; readonly pullRequestUrl: string; readonly title: string }>>,
+  snapshots: ReadonlyArray<RunnerQueueStatus>,
+  results?: ReadonlyArray<RunnerResult>,
 ) =>
   Layer.effect(
     Runner,
     Effect.gen(function* () {
-      const index = yield* Ref.make(0)
+      const peekIndex = yield* Ref.make(0)
+      const nextIndex = yield* Ref.make(0)
+      const idleStatus: RunnerQueueStatus = { kind: "idle" }
+
+      const nextSnapshot = Ref.modify(peekIndex, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? idleStatus, current + 1])
 
       return Runner.of({
-        peekNext: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? Option.none(), current + 1]),
-        runNext: Effect.die("not used in this test"),
+        peekNext: nextSnapshot.pipe(
+          Effect.map((status) =>
+            status.kind === "review" || status.kind === "implementation"
+              ? Option.some(status)
+              : Option.none(),
+          ),
+        ),
+        peekStatus: nextSnapshot,
+        runNext: results
+          ? Ref.modify(nextIndex, (current) => [results[Math.min(current, results.length - 1)]!, current + 1])
+          : Effect.die("not used in this test"),
       })
     }),
   )

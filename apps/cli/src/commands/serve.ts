@@ -1,4 +1,4 @@
-import { Console, Duration, Effect, Option, Result } from "effect"
+import { Console, Duration, Effect, Result } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
 import { RunState } from "../run-state.ts"
 import { Runner } from "../runner.ts"
@@ -18,7 +18,7 @@ export const commandServe = Command.make(
   },
   Effect.fn("commandServe")(function* ({ execute, intervalSeconds }) {
     const runner = yield* Runner
-    let previousTopIssueId: string | null = null
+    let previousStatusKey: string | null = null
     let emptyPolls = 0
     let previouslyActiveRunId: string | null = null
 
@@ -37,34 +37,51 @@ export const commandServe = Command.make(
         previouslyActiveRunId = null
       }
 
-      const topWork = yield* runner.peekNext.pipe(Effect.map(Option.getOrNull))
+      const status = yield* runner.peekStatus
 
-      if (topWork) {
-        emptyPolls = 0
-        if (execute) {
-          const result = yield* runner.runNext.pipe(Effect.result)
-          yield* Result.match(result, {
-            onFailure: (error) => {
-              const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)
-              return Console.log(`Run failed: ${message}`)
-            },
-            onSuccess: (value) =>
-              Console.log(`${value.mode === "review" ? "Updated" : "Opened"} PR for ${value.issueIdentifier}: ${value.pullRequestUrl}`),
-          })
-          previousTopIssueId = null
-        } else if (topWork.id !== previousTopIssueId) {
-          yield* Console.log(
-            topWork.kind === "review"
-              ? `Would review: ${topWork.issueIdentifier} ${topWork.title} (${topWork.pullRequestUrl})`
-              : `Would implement: ${topWork.issueIdentifier} ${topWork.title}`,
-          )
-          previousTopIssueId = topWork.id
+      switch (status.kind) {
+        case "implementation":
+        case "review": {
+          emptyPolls = 0
+          if (execute) {
+            const result = yield* runner.runNext.pipe(Effect.result)
+            yield* Result.match(result, {
+              onFailure: (error) => {
+                const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)
+                return Console.log(`Run failed: ${message}`)
+              },
+              onSuccess: (value) =>
+                Console.log(`${value.mode === "review" ? "Updated" : "Opened"} PR for ${value.issueIdentifier}: ${value.pullRequestUrl}`),
+            })
+            previousStatusKey = null
+          } else if (status.id !== previousStatusKey) {
+            yield* Console.log(
+              status.kind === "review"
+                ? `Would review: ${status.issueIdentifier} ${status.title} (${status.pullRequestUrl})`
+                : `Would implement: ${status.issueIdentifier} ${status.title}`,
+            )
+            previousStatusKey = status.id
+          }
+          break
         }
-      } else {
-        emptyPolls += 1
-        if (previousTopIssueId !== null || emptyPolls === 1 || emptyPolls % noWorkHeartbeatEvery === 0) {
-          yield* Console.log("No actionable Orca work is currently available.")
-          previousTopIssueId = null
+        case "paused": {
+          emptyPolls = 0
+          const pausedKey = `paused:${status.waitingGreptilePrCount}/${status.maxWaitingGreptilePrs}`
+          if (pausedKey !== previousStatusKey) {
+            yield* Console.log(
+              `Waiting for Greptile on ${status.waitingGreptilePrCount} open Orca PRs (cap ${status.maxWaitingGreptilePrs}); new implementation work is paused until review feedback becomes actionable.`,
+            )
+            previousStatusKey = pausedKey
+          }
+          break
+        }
+        case "idle": {
+          emptyPolls += 1
+          if (previousStatusKey !== null || emptyPolls === 1 || emptyPolls % noWorkHeartbeatEvery === 0) {
+            yield* Console.log("No actionable Orca work is currently available.")
+            previousStatusKey = null
+          }
+          break
         }
       }
 
