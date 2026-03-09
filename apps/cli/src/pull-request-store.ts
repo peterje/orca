@@ -20,10 +20,11 @@ const StoredPullRequests = Schema.Array(OrcaManagedPullRequest)
 
 export type PullRequestStoreService = {
   readonly list: Effect.Effect<ReadonlyArray<OrcaManagedPullRequest>, PullRequestStoreError>
-  readonly markReviewHandled: (options: {
+  readonly markGreptileReviewRequested: (options: {
     readonly lastReviewedAtMs: number
     readonly prNumber: number
     readonly repo: string
+    readonly waitingForGreptileReviewSinceMs: number
   }) => Effect.Effect<OrcaManagedPullRequest | null, PullRequestStoreError>
   readonly upsert: (record: {
     readonly branch: string
@@ -121,10 +122,11 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return next
     })
 
-  const markReviewHandled = (options: {
+  const markGreptileReviewRequested = (options: {
     readonly lastReviewedAtMs: number
     readonly prNumber: number
     readonly repo: string
+    readonly waitingForGreptileReviewSinceMs: number
   }) =>
     Effect.gen(function* () {
       const now = Date.now()
@@ -139,7 +141,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
           ...record,
           lastReviewedAtMs: options.lastReviewedAtMs,
           updatedAtMs: now,
-          waitingForGreptileReviewSinceMs: null,
+          waitingForGreptileReviewSinceMs: options.waitingForGreptileReviewSinceMs,
         })
         return updated
       })
@@ -150,7 +152,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return updated
     })
 
-  return PullRequestStore.of({ list, markReviewHandled, upsert })
+  return PullRequestStore.of({ list, markGreptileReviewRequested, upsert })
 })
 
 export const PullRequestStoreLayer = Layer.effect(PullRequestStore, PullRequestStoreLive)
