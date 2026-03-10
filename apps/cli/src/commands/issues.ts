@@ -10,9 +10,9 @@ const commandIssuesList = Command.make(
   Effect.fn("commandIssuesList")(function* () {
     const linear = yield* Linear
     const repoConfig = yield* RepoConfig
-    const config = yield* repoConfig.read
-    const issues = yield* linear.issues({ workspaceSlug: config.linearWorkspace })
-    const plan = planIssues(issues, { linearLabel: config.linearLabel })
+    const config = yield* repoConfig.readOption
+    const issues = yield* linear.issues({ workspaceSlug: config?.linearWorkspace })
+    const plan = planIssues(issues, { linearLabel: config?.linearLabel })
 
     if (plan.work.length === 0) {
       yield* Console.log("No Orca work found.")

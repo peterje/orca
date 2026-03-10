@@ -157,6 +157,52 @@ describe("CLI commands", () => {
       ),
     ))
 
+  it.effect("lists issues before the workflow file exists", () =>
+    Effect.gen(function* () {
+      const run = makeIssuesCliRunner()
+
+      yield* run(["issues", "list"])
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Actionable",
+        "- ENG-3 Fresh checkout issue [priority: High, direct Orca issue]",
+        "",
+        "Blocked",
+        "- None",
+        "",
+        "Dependency graph",
+        "- ENG-3 Fresh checkout issue [actionable, priority: High, direct]",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          Layer.succeed(
+            RepoConfig,
+            RepoConfig.of({
+              bootstrap: () => Effect.die("not used in this test"),
+              configPath: Effect.die("not used in this test"),
+              document: Effect.die("not used in this test"),
+              exists: Effect.die("not used in this test"),
+              read: Effect.die("issues list should not require a workflow file"),
+              readOption: Effect.succeed(null),
+              write: () => Effect.die("not used in this test"),
+            }),
+          ),
+          fixedLinearLayer([
+            issue({
+              id: "fresh-1",
+              identifier: "ENG-3",
+              isOrcaTagged: true,
+              priority: 2,
+              title: "Fresh checkout issue",
+            }),
+          ]),
+        ),
+      ),
+    ))
+
   it.effect("renders nested dependency chains in the graph", () =>
     Effect.gen(function* () {
       const run = makeIssuesCliRunner()

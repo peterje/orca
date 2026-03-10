@@ -1,4 +1,4 @@
-import { Data, Effect, FileSystem, Layer, Ref, Result, Schema, ServiceMap } from "effect"
+import { Data, Effect, FileSystem, Layer, Ref, Result, Schema, Semaphore, ServiceMap } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "node:os"
 import { dirname, resolve as resolvePath } from "node:path"
@@ -122,7 +122,7 @@ export class WorkflowFrontMatter {
       return invalidWorkflowValue(key, "an array of strings", resolved)
     }
 
-    return Effect.succeed(resolved.map((value) => value.trim()))
+    return Effect.succeed([...resolved])
   }
 
   path(key: string, defaultValue?: string): Effect.Effect<string | undefined, RepoConfigError> {
@@ -203,6 +203,7 @@ export const RepoConfigLive = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const cache = yield* Ref.make<LoadedWorkflowState | null>(null)
+  const refreshSemaphore = yield* Semaphore.make(1)
 
   const configPath = resolveWorkflowPath()
 
@@ -217,7 +218,7 @@ export const RepoConfigLive = Effect.gen(function* () {
       )),
   )
 
-  const refresh = Effect.gen(function* () {
+  const refresh = refreshSemaphore.withPermit(Effect.gen(function* () {
     const path = yield* resolveWorkflowPath()
     const cached = yield* Ref.get(cache)
     const sourceResult = yield* Effect.result(readWorkflowSource(fs, path))
@@ -247,7 +248,7 @@ export const RepoConfigLive = Effect.gen(function* () {
 
     yield* Ref.set(cache, loadedResult.success)
     return loadedResult.success
-  })
+  }))
 
   const document = refresh.pipe(Effect.map((state) => state.document))
   const read = refresh.pipe(Effect.map((state) => state.config))
@@ -255,9 +256,9 @@ export const RepoConfigLive = Effect.gen(function* () {
   const readOption = read.pipe(
     Effect.matchEffect({
       onFailure: (error: RepoConfigError) =>
-      error.code === "workflow-file-missing"
-        ? Effect.succeed(null)
-        : Effect.fail(error),
+        error.code === "workflow-file-missing"
+          ? Effect.succeed(null)
+          : Effect.fail(error),
       onSuccess: (config) => Effect.succeed(config),
     }),
   )

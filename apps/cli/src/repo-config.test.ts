@@ -28,15 +28,19 @@ const makeTestFileSystem = () => ({
     }),
 })
 
-const testPlatformLayer = Layer.mergeAll(
-  Layer.succeed(FileSystem.FileSystem, makeTestFileSystem() as unknown as FileSystem.FileSystem),
-  Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() => Effect.die("not used in this test")),
-  ),
-)
+const makeTestPlatformLayer = (fileSystem = makeTestFileSystem() as unknown as FileSystem.FileSystem) =>
+  Layer.mergeAll(
+    Layer.succeed(FileSystem.FileSystem, fileSystem),
+    Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() => Effect.die("not used in this test")),
+    ),
+  )
 
-const repoConfigLayer = RepoConfigLayer.pipe(Layer.provide(testPlatformLayer))
+const makeRepoConfigLayer = (fileSystem = makeTestFileSystem() as unknown as FileSystem.FileSystem) =>
+  RepoConfigLayer.pipe(Layer.provide(makeTestPlatformLayer(fileSystem)))
+
+const repoConfigLayer = makeRepoConfigLayer()
 
 describe("RepoConfig", () => {
   it.effect("bootstraps a workflow scaffold with repo defaults", () =>
@@ -125,6 +129,24 @@ describe("RepoConfig", () => {
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
+  it.effect("preserves quoted whitespace inside string arrays", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: [
+            'verify: ["  bun run check  ", "bun run test"]',
+            "repo: owner/name",
+          ].join("\n"),
+          prompt: "Quoted command whitespace should be preserved",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const config = yield* repoConfig.read
+
+        expect(config.verify).toEqual(["  bun run check  ", "bun run test"])
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
+
   it.effect("ignores unknown top-level front matter keys", () =>
     withTempCwd((tempDirectory) =>
       Effect.gen(function* () {
@@ -193,6 +215,41 @@ describe("RepoConfig", () => {
         expect(afterValidReload.linearLabel).toBe("Autowrite")
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
+
+  it.effect("serializes concurrent refreshes across document and read", () =>
+    withTempCwd((tempDirectory) => {
+      let activeReads = 0
+      let maxActiveReads = 0
+
+      const instrumentedFileSystem = {
+        ...makeTestFileSystem(),
+        readFileString: (path: string) =>
+          Effect.gen(function* () {
+            activeReads += 1
+            maxActiveReads = Math.max(maxActiveReads, activeReads)
+            yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 25)))
+            return readFileSync(path, "utf8")
+          }).pipe(
+            Effect.ensuring(Effect.sync(() => {
+              activeReads -= 1
+            })),
+          ),
+      } as unknown as FileSystem.FileSystem
+
+      return Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: "linear-label: Orca\nrepo: owner/name",
+          prompt: "Concurrent workflow",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const [workflow, config] = yield* Effect.all([repoConfig.document, repoConfig.read], { concurrency: "unbounded" })
+
+        expect(workflow.prompt).toBe("Concurrent workflow")
+        expect(config.linearLabel).toBe("Orca")
+        expect(maxActiveReads).toBe(1)
+      }).pipe(Effect.provide(makeRepoConfigLayer(instrumentedFileSystem)))
+    }))
 
   it.effect("workflow front matter getters resolve defaults, env indirection, and home-relative paths", () =>
     withEnv(
