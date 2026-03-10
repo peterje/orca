@@ -260,17 +260,23 @@ const renderPullRequestReviewMarkdown = (options: {
     || options.greptileThreads.length > 0
     || options.greptileReviews.length > 0
     || options.greptileComments.length > 0
-  const sections = ["# Pull request review feedback"]
+  const sections: Array<string> = []
+  const pushSection = (...lines: Array<string>) => {
+    if (sections.length > 0) {
+      sections.push("")
+    }
+
+    sections.push(...lines)
+  }
 
   if (hasHumanFeedback && hasGreptileFeedback) {
-    sections.push(
-      "",
+    pushSection(
       "If human and Greptile feedback conflict, follow the human feedback first and keep only the Greptile guidance that still fits.",
     )
   }
 
   if (hasHumanFeedback) {
-    sections.push("", "## Human feedback (highest priority)")
+    pushSection("## Human feedback (highest priority)")
 
     if (options.humanThreads.length > 0) {
       sections.push("", "### Unresolved review threads", "")
@@ -291,7 +297,7 @@ const renderPullRequestReviewMarkdown = (options: {
   }
 
   if (hasGreptileFeedback) {
-    sections.push("", "## Greptile feedback")
+    pushSection("## Greptile feedback")
 
     if (options.reviewScore !== null) {
       sections.push("", `Confidence: ${options.reviewScore.value}/${options.reviewScore.maximum}`)

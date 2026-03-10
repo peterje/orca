@@ -21,7 +21,8 @@ describe("review queue", () => {
 
     expect(pending).not.toBeNull()
     expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
-    expect(pending?.feedbackMarkdown).toContain("# Pull request review feedback")
+    expect(pending?.feedbackMarkdown).toMatch(/^## Greptile feedback/)
+    expect(pending?.feedbackMarkdown).not.toContain("# Pull request review feedback")
     expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
     expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
     expect(pending?.feedbackMarkdown).toContain("Please keep this branch scoped.")
