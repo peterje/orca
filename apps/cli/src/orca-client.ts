@@ -110,11 +110,18 @@ export const OrcaClientLayer = Layer.effect(
 
         const response = yield* Effect.tryPromise({
           try: () =>
-            fetch(`${control.baseUrl}/health`, {
-              headers: {
-                authorization: `Bearer ${control.token}`,
+            fetchWithTimeout(
+              `${control.baseUrl}/health`,
+              {
+                headers: {
+                  authorization: `Bearer ${control.token}`,
+                },
               },
-            }),
+              {
+                message: "Timed out waiting 5 seconds for the local Orca server health check.",
+                timeoutMs: defaultServerHealthCheckTimeoutMs,
+              },
+            ),
           catch: () => false,
         }).pipe(
           Effect.catch(() => Effect.succeed(false as const)),
@@ -128,13 +135,16 @@ export const OrcaClientLayer = Layer.effect(
       const command = hasDistBinary ? ["./dist/orca-server"] : ["bun", "run", "./apps/server/src/main.ts"]
 
       yield* Effect.try({
-        try: () =>
-          Bun.spawn(command, {
+        try: () => {
+          const child = Bun.spawn(command, {
             cwd: process.cwd(),
-            stderr: "inherit",
+            detached: true,
+            stderr: "ignore",
             stdin: "ignore",
             stdout: "ignore",
-          }),
+          })
+          child.unref()
+        },
         catch: (cause) => new OrcaClientError({ message: "Failed to start the local Orca server.", cause }),
       })
     })
@@ -268,7 +278,7 @@ export const OrcaClientLayer = Layer.effect(
           control,
           method: options.method,
           path: options.path,
-          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+          timeoutMs: options.timeoutMs ?? defaultServerRequestTimeoutMs,
         })
 
         if (!response.ok) {
@@ -290,6 +300,7 @@ export const OrcaClientLayer = Layer.effect(
           control,
           method: "POST",
           path,
+          timeoutMs: defaultServerRequestTimeoutMs,
         })
 
         if (!response.ok) {
@@ -343,6 +354,8 @@ export class OrcaClientError extends Data.TaggedError("OrcaClientError")<{
   readonly cause?: unknown
 }> {}
 
+const defaultServerHealthCheckTimeoutMs = 5_000
+const defaultServerRequestTimeoutMs = 60_000
 const defaultRunNextTimeoutBufferMinutes = 5
 
 const OrcaServerStartupLockData = Schema.Struct({

@@ -181,7 +181,7 @@ const runVoid = async <A, E>(effect: Effect.Effect<A, E, AppServices>): Promise<
 const openEventStream = async (request: Request, serverReadyEvent: ServerReadyEvent): Promise<Response> => {
   try {
     const services = await runtime.services()
-    const stream = Effect.runSyncWith(services)(
+    const stream = await runtime.runPromise(
       Effect.gen(function* () {
         const events = yield* OrcaEvents
         return events.stream.pipe(
