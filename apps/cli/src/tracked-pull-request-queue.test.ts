@@ -39,6 +39,89 @@ describe("tracked pull request queue", () => {
       expect(queue.stalePullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-1", "ENG-2"])
     }))
 
+  it.effect("keeps terminal pull requests out of the Greptile loop after reload", () =>
+    Effect.gen(function* () {
+      const removedPullRequests: Array<string> = []
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileCompletedAtMs: 20,
+              issueId: "issue-5",
+              issueIdentifier: "ENG-5",
+              lastReviewedAtMs: 15,
+              prNumber: 47,
+              prUrl: "https://github.com/peterje/orca/pull/47",
+              waitingForGreptileReviewSinceMs: 10,
+            }),
+          ]),
+          remove: ({ prNumber, repo }) =>
+            Effect.sync(() => {
+              removedPullRequests.push(`${repo}#${prNumber}`)
+              return true
+            }),
+        },
+      })
+
+      expect(queue.openPullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-5"])
+      expect(queue.pendingReviews).toEqual([])
+      expect(queue.waitingForReviewPullRequests).toEqual([])
+      expect(queue.stalePullRequests).toEqual([])
+      expect(removedPullRequests).toEqual([])
+    }))
+
+  it.effect("prunes terminal pull requests that were closed or merged before reload", () =>
+    Effect.gen(function* () {
+      const removedPullRequests: Array<string> = []
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileCompletedAtMs: 20,
+              issueId: "issue-6",
+              issueIdentifier: "ENG-6",
+              lastReviewedAtMs: 15,
+              prNumber: 48,
+              prUrl: "https://github.com/peterje/orca/pull/48",
+            }),
+            trackedPullRequest({
+              greptileCompletedAtMs: 21,
+              issueId: "issue-7",
+              issueIdentifier: "ENG-7",
+              lastReviewedAtMs: 16,
+              prNumber: 49,
+              prUrl: "https://github.com/peterje/orca/pull/49",
+            }),
+          ]),
+          remove: ({ prNumber, repo }) =>
+            Effect.sync(() => {
+              removedPullRequests.push(`${repo}#${prNumber}`)
+              return true
+            }),
+        },
+      })
+
+      expect(queue.openPullRequests).toEqual([])
+      expect(queue.pendingReviews).toEqual([])
+      expect(queue.waitingForReviewPullRequests).toEqual([])
+      expect(queue.stalePullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-6", "ENG-7"])
+      expect(removedPullRequests).toEqual(["peterje/orca#48", "peterje/orca#49"])
+    }))
+
   it.effect("separates tracked pull requests that need a base sync from review follow-up work", () =>
     Effect.gen(function* () {
       const queue = yield* loadTrackedPullRequestQueue({
@@ -95,6 +178,32 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
   "peterje/orca#44": pullRequestFeedback({ number: 44, url: "https://github.com/peterje/orca/pull/44" }),
   "peterje/orca#45": pullRequestFeedback({ mergeStateStatus: "BEHIND", number: 45, url: "https://github.com/peterje/orca/pull/45" }),
   "peterje/orca#46": pullRequestFeedback({ mergeStateStatus: "DIRTY", number: 46, url: "https://github.com/peterje/orca/pull/46" }),
+  "peterje/orca#47": pullRequestFeedback({
+    comments: [
+      {
+        authorLogin: "greptile-apps[bot]",
+        body: "One more thing to tighten up.",
+        createdAtMs: 25,
+        id: "comment-47",
+        isBot: true,
+        updatedAtMs: 25,
+      },
+    ],
+    number: 47,
+    reviews: [
+      {
+        authorLogin: "greptile-apps[bot]",
+        body: "Confidence: 4/5",
+        createdAtMs: 24,
+        id: "review-47",
+        isBot: true,
+        updatedAtMs: 24,
+      },
+    ],
+    url: "https://github.com/peterje/orca/pull/47",
+  }),
+  "peterje/orca#48": pullRequestFeedback({ number: 48, state: "CLOSED", url: "https://github.com/peterje/orca/pull/48" }),
+  "peterje/orca#49": pullRequestFeedback({ number: 49, state: "MERGED", url: "https://github.com/peterje/orca/pull/49" }),
 }
 
 const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Type> & Pick<typeof OrcaManagedPullRequest.Type, "issueId" | "issueIdentifier" | "prNumber" | "prUrl">) =>
