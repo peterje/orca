@@ -113,10 +113,10 @@ export const buildPullRequestReviewPromptInput = (options: {
   const latestFeedbackAtMs = findLatestNumber([
     ...humanComments.map(getEntryActivityAtMs),
     ...humanReviews.map(getEntryActivityAtMs),
-    ...getFreshThreadActivityAtMs(humanThreads, "human", options.since),
+    ...getFreshThreadActivityAtMs(humanThreads, options.since),
     ...promptGreptileComments.map(getEntryActivityAtMs),
     ...promptGreptileReviews.map(getEntryActivityAtMs),
-    ...getFreshThreadActivityAtMs(promptGreptileThreads, "greptile", options.since),
+    ...getFreshThreadActivityAtMs(promptGreptileThreads, options.since, "greptile"),
   ])
 
   if (latestFeedbackAtMs === null) {
@@ -230,16 +230,16 @@ const hasFreshThreadFeedback = (
   threads: ReadonlyArray<ReviewFeedbackThread>,
   source: ReviewFeedbackSource,
   since: number,
-) => threads.some((thread) => thread.comments.some((comment) => comment.source === source && getEntryActivityAtMs(comment) > since))
+) => getFreshThreadActivityAtMs(threads, since, source).length > 0
 
 const getFreshThreadActivityAtMs = (
   threads: ReadonlyArray<ReviewFeedbackThread>,
-  source: ReviewFeedbackSource,
   since: number,
+  source?: ReviewFeedbackSource,
 ) =>
   threads.flatMap((thread) => {
     const latest = thread.comments
-      .filter((comment) => comment.source === source && getEntryActivityAtMs(comment) > since)
+      .filter((comment) => (source === undefined || comment.source === source) && getEntryActivityAtMs(comment) > since)
       .map(getEntryActivityAtMs)
 
     return latest.length === 0 ? [] : [Math.max(...latest)]

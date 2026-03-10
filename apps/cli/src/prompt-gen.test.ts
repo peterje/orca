@@ -87,6 +87,7 @@ describe("PromptGen", () => {
       expect(result.prompt).toContain("merge conflicts")
       expect(result.promptFileContents).toContain("## Merge conflict context")
       expect(result.promptFileContents).toContain("attempted a merge")
+      expect(result.promptFileContents).toContain("- Have the existing branch ready for another review pass.")
       expect(result.promptFileContents).toContain("apps/cli/src/runner.ts")
       expect(result.promptFileContents).toContain("- Resolve all remaining merge conflicts before finishing.")
       expect(result.promptFileContents).toContain("- Use a conventional commit message every time you create a commit.")

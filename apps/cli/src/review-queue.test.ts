@@ -134,6 +134,36 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(120)
   })
 
+  it("tracks fresh Greptile replies on mixed human threads", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({ authorLogin: "reviewer", body: "Use the reviewer naming here.", createdAtMs: 10 }),
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "I still prefer the bot naming here.",
+                createdAtMs: 30,
+                id: "review-comment-2",
+                isBot: true,
+              }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 15, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("Use the reviewer naming here.")
+    expect(pending?.feedbackMarkdown).toContain("I still prefer the bot naming here.")
+    expect(pending?.latestFeedbackAtMs).toBe(30)
+  })
+
   it("omits stale Greptile threads once the latest score is complete", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({

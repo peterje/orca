@@ -225,7 +225,7 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 
 ## Required git outcome
 
-- Have the existing branch ready for another Greptile review pass.
+- Have the existing branch ready for another review pass.
 - Resolve all remaining merge conflicts before finishing.
 - Use a conventional commit message every time you create a commit.
 - Update the existing pull request instead of creating a new branch or pull request.
