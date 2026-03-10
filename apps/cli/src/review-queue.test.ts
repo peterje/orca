@@ -181,6 +181,41 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(30)
   })
 
+  it("surfaces the human reply first when Greptile opens a mixed thread", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Use the bot naming here.",
+                createdAtMs: 10,
+                id: "review-comment-1",
+                isBot: true,
+              }),
+              reviewComment({
+                authorLogin: "reviewer",
+                body: "Keep the reviewer-approved naming instead.",
+                createdAtMs: 30,
+                id: "review-comment-2",
+              }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 5 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain('<comment author="reviewer" path="apps/cli/src/runner.ts" priority="human" source="human">')
+    expect(pending?.feedbackMarkdown).toContain('<comment author="greptile-apps[bot]" source="greptile">')
+    expect(pending?.feedbackMarkdown).not.toContain('<comment author="greptile-apps[bot]" path="apps/cli/src/runner.ts" priority="human" source="greptile">')
+  })
+
   it("omits stale Greptile threads once the latest score is complete", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
