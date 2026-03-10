@@ -1,4 +1,4 @@
-import { Console, Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
+import { Cause, Console, Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
 import { AgentRunner, AgentRunnerError, AgentRunnerStalledError, AgentRunnerTimeoutError } from "./agent-runner.ts"
 import { GitHub, GitHubError, type GitHubService, type PullRequestInfo } from "./github.ts"
 import { planIssues, type IssuePlan, type PlannedIssue } from "./issue-planner.ts"
@@ -444,9 +444,9 @@ const runImplementation = (options: {
 
       return result
     }).pipe(
-      Effect.tapError((error) =>
-        reportFailure({
-          error,
+      Effect.tapCause((cause) =>
+        reportFailureCause({
+          cause,
           github: options.github,
           issue: {
             issueId: options.issue.id,
@@ -628,9 +628,9 @@ const runMaintenance = (options: {
 
       return result
     }).pipe(
-      Effect.tapError((error) =>
-        reportFailure({
-          error,
+      Effect.tapCause((cause) =>
+        reportFailureCause({
+          cause,
           github: options.github,
           issue: options.pullRequest,
           linear: options.linear,
@@ -787,9 +787,9 @@ const runReview = (options: {
 
       return result
     }).pipe(
-      Effect.tapError((error) =>
-        reportFailure({
-          error,
+      Effect.tapCause((cause) =>
+        reportFailureCause({
+          cause,
           github: options.github,
           issue: options.review.pullRequest,
           linear: options.linear,
@@ -996,6 +996,46 @@ const reportFailure = (options: {
       issueId: options.issue.issueId,
     }).pipe(Effect.orElseSucceed(() => undefined))
   })
+
+const reportFailureCause = (options: {
+  readonly cause: Cause.Cause<RunnerFailure | RepoConfigError | RunStateBusyError | RunnerNoWorkError>
+  readonly github: GitHubService
+  readonly issue: {
+    readonly issueId: string
+    readonly issueIdentifier: string
+  }
+  readonly linear: LinearService
+  readonly managedWorktree: {
+    readonly directory: string
+  }
+}) => {
+  const failure = options.cause.reasons.find(Cause.isFailReason)?.error
+  if (failure !== undefined) {
+    return reportFailure({
+      error: failure,
+      github: options.github,
+      issue: options.issue,
+      linear: options.linear,
+      managedWorktree: options.managedWorktree,
+    })
+  }
+
+  const defect = options.cause.reasons.find(Cause.isDieReason)?.defect
+  if (defect !== undefined) {
+    return reportFailure({
+      error: new RunnerFailure({
+        cause: defect,
+        message: getErrorMessage(defect),
+      }),
+      github: options.github,
+      issue: options.issue,
+      linear: options.linear,
+      managedWorktree: options.managedWorktree,
+    })
+  }
+
+  return Effect.void
+}
 
 const makeImplementationCommitMessage = (issue: PlannedIssue) =>
   `feat: implement ${issue.identifier.toLowerCase()} ${slugifyIssueTitle(issue.title)}`

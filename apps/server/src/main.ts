@@ -191,7 +191,7 @@ const handleRequest = async (
     case "GET /events":
       return openEventStream(request, context.serverReadyEvent)
     default:
-      return new Response("Not found", { status: 404 })
+      return jsonResponse(new OrcaServerErrorResponse({ message: `Orca server route not found: ${request.method} ${url.pathname}.`, tag: "NotFound" }), 404)
   }
 }
 

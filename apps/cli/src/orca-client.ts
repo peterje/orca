@@ -40,6 +40,7 @@ export const OrcaClientLayer = Layer.effect(
     const repoConfig = yield* RepoConfig
     const controlFile = `${orcaDirectory}/server.json`
     const lockFile = `${orcaDirectory}/server.lock`
+    const serverLogFile = `${orcaDirectory}/server.log`
 
     const readControlOption = Effect.gen(function* () {
       const exists = yield* fs.exists(controlFile).pipe(
@@ -100,6 +101,9 @@ export const OrcaClientLayer = Layer.effect(
 
     const removeControlFile = fs.remove(controlFile).pipe(Effect.catch(() => Effect.void))
     const removeLockFile = fs.remove(lockFile).pipe(Effect.catch(() => Effect.void))
+    const prepareServerLogFile = fs.writeFileString(serverLogFile, "").pipe(
+      Effect.mapError((cause) => new OrcaClientError({ message: `Failed to prepare ${serverLogFile}.`, cause })),
+    )
 
     const logServerStartup = (message: string) => Effect.sync(() => process.stderr.write(`${message}\n`))
 
@@ -149,7 +153,7 @@ export const OrcaClientLayer = Layer.effect(
           const child = Bun.spawn(command, {
             cwd: process.cwd(),
             detached: true,
-            stderr: "ignore",
+            stderr: Bun.file(serverLogFile),
             stdin: "ignore",
             stdout: "ignore",
           })
@@ -240,7 +244,7 @@ export const OrcaClientLayer = Layer.effect(
 
       return yield* Effect.fail(
         new OrcaClientError({
-          message: `Timed out waiting ${formatTimeoutDuration(serverStartupTimeoutMs)} for another Orca process to finish starting the local server.`,
+          message: `Timed out waiting ${formatTimeoutDuration(serverStartupTimeoutMs)} for another Orca process to finish starting the local server. Check ${serverLogFile} for startup logs.`,
         }),
       )
     })
@@ -267,7 +271,7 @@ export const OrcaClientLayer = Layer.effect(
       }
 
       return yield* Effect.fail(
-        new OrcaClientError({ message: `Timed out waiting ${formatTimeoutDuration(serverStartupTimeoutMs)} for the local Orca server to start.` }),
+        new OrcaClientError({ message: `Timed out waiting ${formatTimeoutDuration(serverStartupTimeoutMs)} for the local Orca server to start. Check ${serverLogFile} for startup logs.` }),
       )
     })
 
@@ -289,6 +293,7 @@ export const OrcaClientLayer = Layer.effect(
         }
 
         yield* removeControlFile
+        yield* prepareServerLogFile
         yield* logServerStartup("Starting local Orca server...")
         yield* spawnServer
         return yield* waitForServer
