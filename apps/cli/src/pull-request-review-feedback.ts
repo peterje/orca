@@ -53,7 +53,7 @@ export const buildPullRequestReviewPromptInput = (options: {
   const unresolvedThreads = options.feedback.reviewThreads
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
     .map(classifyReviewThread)
-    .filter((thread) => thread.comments.length > 0)
+    .filter((thread): thread is ReviewFeedbackThread => thread !== null)
     .sort(compareReviewThreads)
 
   const humanThreads = unresolvedThreads.filter((thread) => thread.comments.some((comment) => comment.source === "human"))
@@ -88,8 +88,13 @@ export const buildPullRequestReviewPromptInput = (options: {
     : parsePendingGreptileReviewScore(latestGreptileScoreEntry.body)
   const activeGreptileScore = reviewScore !== null && reviewScore.value < reviewScore.maximum ? reviewScore : null
 
-  const promptGreptileComments = includeLatestGreptileScoreComment(greptileComments, latestGreptileScoreEntry, activeGreptileScore)
-  const promptGreptileReviews = includeLatestGreptileScoreReview(greptileReviews, latestGreptileScoreEntry, activeGreptileScore)
+  const promptGreptileComments = activeGreptileScore === null
+    ? []
+    : includeLatestGreptileScoreComment(greptileComments, latestGreptileScoreEntry, activeGreptileScore)
+  const promptGreptileReviews = activeGreptileScore === null
+    ? []
+    : includeLatestGreptileScoreReview(greptileReviews, latestGreptileScoreEntry, activeGreptileScore)
+  const promptGreptileThreads = activeGreptileScore === null ? [] : greptileThreads
 
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0
@@ -105,21 +110,24 @@ export const buildPullRequestReviewPromptInput = (options: {
     return null
   }
 
-  const latestFeedbackAtMs = Math.max(
+  const latestFeedbackAtMs = findLatestNumber([
     ...humanComments.map(getEntryActivityAtMs),
     ...humanReviews.map(getEntryActivityAtMs),
     ...getFreshThreadActivityAtMs(humanThreads, "human", options.since),
-    ...(latestGreptileScoreEntryAtMs > options.since ? [latestGreptileScoreEntryAtMs] : []),
-    ...greptileComments.map(getEntryActivityAtMs),
-    ...greptileReviews.map(getEntryActivityAtMs),
-    ...getFreshThreadActivityAtMs(unresolvedThreads, "greptile", options.since),
-  )
+    ...promptGreptileComments.map(getEntryActivityAtMs),
+    ...promptGreptileReviews.map(getEntryActivityAtMs),
+    ...getFreshThreadActivityAtMs(promptGreptileThreads, "greptile", options.since),
+  ])
+
+  if (latestFeedbackAtMs === null) {
+    return null
+  }
 
   return {
     feedbackMarkdown: renderPullRequestReviewMarkdown({
       greptileComments: promptGreptileComments,
       greptileReviews: promptGreptileReviews,
-      greptileThreads,
+      greptileThreads: promptGreptileThreads,
       humanComments,
       humanReviews,
       humanThreads,
@@ -176,11 +184,17 @@ const classifyReviewComment = (comment: PullRequestReviewComment): ReviewFeedbac
   source: getEntrySource(comment),
 })
 
-const classifyReviewThread = (thread: PullRequestReviewThread): ReviewFeedbackThread => {
+const classifyReviewThread = (thread: PullRequestReviewThread): ReviewFeedbackThread | null => {
   const comments = thread.comments.map(classifyReviewComment)
+  const latestActivityAtMs = findLatestEntryActivityAtMs(comments)
+
+  if (latestActivityAtMs === null) {
+    return null
+  }
+
   return {
     comments,
-    latestActivityAtMs: Math.max(...comments.map(getEntryActivityAtMs)),
+    latestActivityAtMs,
   }
 }
 
@@ -240,13 +254,21 @@ const renderPullRequestReviewMarkdown = (options: {
   readonly humanThreads: ReadonlyArray<ReviewFeedbackThread>
   readonly reviewScore: PendingGreptileReviewScore | null
 }) => {
-  const sections = [
-    "# Pull request review feedback",
-    "",
-    "If human and Greptile feedback conflict, follow the human feedback first and keep only the Greptile guidance that still fits.",
-  ]
+  const hasHumanFeedback = options.humanThreads.length > 0 || options.humanReviews.length > 0 || options.humanComments.length > 0
+  const hasGreptileFeedback = options.reviewScore !== null
+    || options.greptileThreads.length > 0
+    || options.greptileReviews.length > 0
+    || options.greptileComments.length > 0
+  const sections = ["# Pull request review feedback"]
 
-  if (options.humanThreads.length > 0 || options.humanReviews.length > 0 || options.humanComments.length > 0) {
+  if (hasHumanFeedback && hasGreptileFeedback) {
+    sections.push(
+      "",
+      "If human and Greptile feedback conflict, follow the human feedback first and keep only the Greptile guidance that still fits.",
+    )
+  }
+
+  if (hasHumanFeedback) {
     sections.push("", "## Human feedback (highest priority)")
 
     if (options.humanThreads.length > 0) {
@@ -267,12 +289,7 @@ const renderPullRequestReviewMarkdown = (options: {
     }
   }
 
-  if (
-    options.reviewScore !== null
-    || options.greptileThreads.length > 0
-    || options.greptileReviews.length > 0
-    || options.greptileComments.length > 0
-  ) {
+  if (hasGreptileFeedback) {
     sections.push("", "## Greptile feedback")
 
     if (options.reviewScore !== null) {
@@ -362,6 +379,21 @@ const findLatestEntry = <A extends { readonly createdAtMs: number; readonly upda
   for (const entry of entries) {
     if (latest === null || getEntryActivityAtMs(entry) > getEntryActivityAtMs(latest)) {
       latest = entry
+    }
+  }
+
+  return latest
+}
+
+const findLatestEntryActivityAtMs = <A extends { readonly createdAtMs: number; readonly updatedAtMs: number }>(entries: ReadonlyArray<A>) =>
+  findLatestNumber(entries.map(getEntryActivityAtMs))
+
+const findLatestNumber = (values: ReadonlyArray<number>): number | null => {
+  let latest: number | null = null
+
+  for (const value of values) {
+    if (latest === null || value > latest) {
+      latest = value
     }
   }
 
