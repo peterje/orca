@@ -66,6 +66,7 @@ const main = async () => {
   const serverReadyEvent: ServerReadyEvent = { pid: process.pid, startedAtMs, type: "server-ready" }
   let cleanedUp = false
   let pollingWaitingPullRequests = false
+  let runningNext = false
   let shuttingDown = false
 
   const server = Bun.serve({
@@ -79,6 +80,18 @@ const main = async () => {
         pollingWaitingPullRequests = true
         return runVoid(effect).finally(() => {
           pollingWaitingPullRequests = false
+        })
+      },
+      runNextExclusively: (effect) => {
+        if (runningNext) {
+          return Promise.resolve(
+            jsonResponse(new OrcaServerErrorResponse({ message: "An Orca run is already active.", tag: "RunStateBusyError" }), 409),
+          )
+        }
+
+        runningNext = true
+        return runJson(effect).finally(() => {
+          runningNext = false
         })
       },
       serverReadyEvent,
@@ -137,6 +150,7 @@ const handleRequest = async (
   context: {
     readonly isShuttingDown: () => boolean
     readonly runPollWaitingPullRequests: <E>(effect: Effect.Effect<void, E, AppServices>) => Promise<Response>
+    readonly runNextExclusively: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Promise<Response>
     readonly serverReadyEvent: ServerReadyEvent
     readonly token: string
   },
@@ -184,7 +198,7 @@ const handleRequest = async (
         yield* runner.pollWaitingPullRequests
       }))
     case "POST /runner/run-next":
-      return runJson(Effect.gen(function* () {
+      return context.runNextExclusively(Effect.gen(function* () {
         const runner = yield* Runner
         return yield* runner.runNext
       }))

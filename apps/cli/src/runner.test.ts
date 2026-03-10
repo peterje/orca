@@ -1280,6 +1280,59 @@ describe("Runner", () => {
       }))),
     )
   })
+
+  it.effect("publishes a run-failed event when implementation work is interrupted after start", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const exit = yield* runner.runNext.pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+        }
+
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            mode: "implementation",
+            type: "run-started",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            stage: "implementing",
+            type: "run-stage-changed",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            message: "Run was interrupted.",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Run was interrupted.",
+              `- Worktree: ${join(tempDirectory, "worktree")}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        agentRunnerRun: () => Effect.interrupt,
+        issueComments,
+        publishedEvents,
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
 })
 
 const makeRunnerLayer = (options: {

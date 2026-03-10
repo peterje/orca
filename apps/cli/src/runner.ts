@@ -1049,6 +1049,20 @@ const reportFailureCause = (options: {
     })
   }
 
+  const interrupt = options.cause.reasons.find(Cause.isInterruptReason)
+  if (interrupt !== undefined) {
+    return reportFailure({
+      error: new RunnerFailure({
+        cause: interrupt,
+        message: "Run was interrupted.",
+      }),
+      github: options.github,
+      issue: options.issue,
+      linear: options.linear,
+      managedWorktree: options.managedWorktree,
+    })
+  }
+
   return Effect.void
 }
 

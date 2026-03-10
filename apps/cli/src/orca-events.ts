@@ -11,6 +11,7 @@ export const OrcaEvents = ServiceMap.Service<OrcaEventsService>("orca/OrcaEvents
 export const OrcaEventsLayer = Layer.effect(
   OrcaEvents,
   Effect.gen(function* () {
+    // No replay: new SSE clients only receive events published after they subscribe.
     const pubsub = yield* PubSub.unbounded<OrcaServerEvent>()
 
     return OrcaEvents.of({
