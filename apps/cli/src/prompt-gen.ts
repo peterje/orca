@@ -55,6 +55,7 @@ export const PromptGenLive = Effect.gen(function* () {
     Effect.gen(function* () {
       const repoInstructions = yield* readAgentsInstructions(fs)
       const dependencyGraph = renderDependencyGraph(options.plan.work).join("\n")
+      const linearIssueReference = makeLinearIssueReference(options.issue.identifier, options.issue.workspaceSlug)
       const prompt = `Implement the attached Linear issue in the current repository without asking for permission.`
       const promptFileContents = `# Linear issue
 
@@ -81,7 +82,7 @@ ${repoInstructions}
 - Do not ask for permission; pick reasonable defaults and keep going.
 - Do not mutate unrelated git state.
 - Do not commit secrets or any files under \`.orca/\`.
-- Prefer a conventional commit if you create a commit.
+- Use a conventional commit message if you create a commit.
 - Prefer a draft pull request unless there is already an open PR for this branch.
 
 ## Verification commands
@@ -91,10 +92,13 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 ## Required git outcome
 
 - Have the branch ready for review.
-- If you commit, use a conventional commit message.
+- Use a conventional commit message every time you create a commit.
 - If you open a PR, use a lowercase conventional commit title.
 - Create the PR with \`gh pr create\` and a HEREDOC body so the formatting is preserved.
-- Write the PR body in lowercase narrative prose, use only \`###\` and \`####\` headings, include the verification commands you ran under \`### verification\`, and end with \`closes ${options.issue.identifier}\`.
+- Write the PR body with bold section labels instead of markdown headings: \`**closes**\`, \`**summary**\`, and \`**verification**\`.
+- Under \`**closes**\`, link the Linear ticket as \`${linearIssueReference}\`.
+- Keep the prose lowercase unless code or ticket identifiers require otherwise.
+- Make the \`**summary**\` section a readable narrative that explains what changed and why it matters, and avoid file-by-file implementation details.
 `
 
       return { prompt, promptFileContents }
@@ -143,7 +147,7 @@ ${repoInstructions}
 - Do not ask for permission; pick reasonable defaults and keep going.
 - Do not mutate unrelated git state.
 - Do not commit secrets or any files under \`.orca/\`.
-- Prefer a conventional commit if you create a commit.
+- Use a conventional commit message if you create a commit.
 - Keep using the existing branch and pull request.
 
 ## Verification commands
@@ -153,9 +157,10 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 ## Required git outcome
 
 - Have the existing branch ready for another Greptile review pass.
-- If you commit, use a conventional commit message.
+- Use a conventional commit message every time you create a commit.
 - Update the existing pull request instead of creating a new branch or pull request.
 - Keep the pull request title unchanged.
+- If you update the PR description, keep the same lowercase narrative format with \`**closes**\`, \`**summary**\`, and \`**verification**\`.
 - Mention the verification commands you ran in any pull request update you make.
 `
 
@@ -211,7 +216,7 @@ ${repoInstructions}
 - Do not ask for permission; pick reasonable defaults and keep going.
 - Do not mutate unrelated git state.
 - Do not commit secrets or any files under \`.orca/\`.
-- Prefer a conventional commit if you create a commit.
+- Use a conventional commit message if you create a commit.
 - Keep using the existing branch and pull request.
 
 ## Verification commands
@@ -222,9 +227,10 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 
 - Have the existing branch ready for another Greptile review pass.
 - Resolve all remaining merge conflicts before finishing.
-- If you commit, use a conventional commit message.
+- Use a conventional commit message every time you create a commit.
 - Update the existing pull request instead of creating a new branch or pull request.
 - Keep the pull request title unchanged.
+- If you update the PR description, keep the same lowercase narrative format with \`**closes**\`, \`**summary**\`, and \`**verification**\`.
 - Mention the verification commands you ran in any pull request update you make.
 `
 
@@ -251,3 +257,10 @@ const readAgentsInstructions = (fs: FileSystem.FileSystem) =>
       Effect.mapError((cause) => new PromptGenError({ message: "Failed to read AGENTS.md.", cause })),
     )
   })
+
+const makeLinearIssueReference = (issueIdentifier: string, workspaceSlug: string | undefined) => {
+  const normalizedWorkspaceSlug = workspaceSlug?.trim().toLowerCase()
+  return normalizedWorkspaceSlug && normalizedWorkspaceSlug.length > 0
+    ? `[${issueIdentifier}](https://linear.app/${normalizedWorkspaceSlug}/issue/${issueIdentifier})`
+    : issueIdentifier
+}

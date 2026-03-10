@@ -9,6 +9,7 @@ import { commandServe } from "./commands/serve.ts"
 import { commandStatus } from "./commands/status.ts"
 import { Linear, type LinearIssue } from "./linear.ts"
 import { MissionControl, type MissionControlSnapshot } from "./mission-control.ts"
+import { RepoConfig, RepoConfigData } from "./repo-config.ts"
 import { RunState, type ActiveRun } from "./run-state.ts"
 import { Runner, RunnerFailure } from "./runner.ts"
 
@@ -121,6 +122,36 @@ describe("CLI commands", () => {
               priority: 2,
               title: "Ready issue",
             }),
+          ]),
+        ),
+      ),
+    ))
+
+  it.effect("uses repo-local label and workspace filters for issues list", () =>
+    Effect.gen(function* () {
+      const run = makeIssuesCliRunner()
+
+      yield* run(["issues", "list"])
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Actionable",
+        "- ENG-2 Workspace match [priority: None, direct Orca issue]",
+        "",
+        "Blocked",
+        "- None",
+        "",
+        "Dependency graph",
+        "- ENG-2 Workspace match [actionable, priority: None, direct]",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          fixedRepoConfigLayer({ linearLabel: "Autowrite", linearWorkspace: "coteachai" }),
+          fixedLinearLayer([
+            issue({ id: "default-1", identifier: "ENG-1", isOrcaTagged: true, title: "Default workspace" }),
+            issue({ id: "custom-1", identifier: "ENG-2", labels: ["Autowrite"], title: "Workspace match", workspaceSlug: "coteachai" }),
           ]),
         ),
       ),
@@ -361,22 +392,37 @@ const cliEnvironmentLayer = Layer.mergeAll(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make(() => Effect.die("not used in this test")),
   ),
+  Layer.succeed(
+    RepoConfig,
+    RepoConfig.of({
+      bootstrap: () => Effect.die("not used in this test"),
+      configPath: Effect.die("not used in this test"),
+      exists: Effect.die("not used in this test"),
+      read: Effect.die("not used in this test"),
+      readOption: Effect.succeed(null),
+      write: () => Effect.die("not used in this test"),
+    }),
+  ),
   Stdio.layerTest({}),
 )
 
-const fixedLinearLayer = (issues: ReadonlyArray<LinearIssue>) =>
+type TestLinearIssue = LinearIssue & {
+  readonly workspaceSlug?: string | undefined
+}
+
+const fixedLinearLayer = (issues: ReadonlyArray<TestLinearIssue>) =>
   Layer.succeed(
     Linear,
     Linear.of({
       authenticate: Effect.die("not used in this test"),
       commentOnIssue: () => Effect.die("not used in this test"),
-      issues: Effect.succeed(issues),
+      issues: (options) => Effect.succeed(filterIssuesByWorkspace(issues, options?.workspaceSlug)),
       markIssueInProgress: () => Effect.die("not used in this test"),
       viewer: Effect.die("not used in this test"),
     }),
   )
 
-const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<LinearIssue>>) =>
+const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<TestLinearIssue>>) =>
   Layer.effect(
     Linear,
     Effect.gen(function* () {
@@ -385,10 +431,27 @@ const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<LinearIssu
       return Linear.of({
         authenticate: Effect.die("not used in this test"),
         commentOnIssue: () => Effect.die("not used in this test"),
-        issues: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? [], current + 1]),
+        issues: (options) =>
+          Ref.modify(index, (current) => {
+            const issues = snapshots[Math.min(current, snapshots.length - 1)] ?? []
+            return [filterIssuesByWorkspace(issues, options?.workspaceSlug), current + 1]
+          }),
         markIssueInProgress: () => Effect.die("not used in this test"),
         viewer: Effect.die("not used in this test"),
       })
+    }),
+  )
+
+const fixedRepoConfigLayer = (config: { readonly linearLabel?: string | undefined; readonly linearWorkspace?: string | undefined }) =>
+  Layer.succeed(
+    RepoConfig,
+    RepoConfig.of({
+      bootstrap: () => Effect.die("not used in this test"),
+      configPath: Effect.die("not used in this test"),
+      exists: Effect.die("not used in this test"),
+      read: Effect.succeed(makeRepoConfigData(config)),
+      readOption: Effect.succeed(makeRepoConfigData(config)),
+      write: () => Effect.die("not used in this test"),
     }),
   )
 
@@ -444,7 +507,7 @@ const snapshot = (overrides?: Partial<MissionControlSnapshot>): MissionControlSn
   },
 })
 
-const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "identifier" | "title">): LinearIssue => ({
+const issue = (overrides: Partial<TestLinearIssue> & Pick<LinearIssue, "id" | "identifier" | "title">): TestLinearIssue => ({
   blockedBy: overrides.blockedBy ?? [],
   childIds: overrides.childIds ?? [],
   createdAtMs: overrides.createdAtMs ?? Date.parse("2026-01-01T00:00:00.000Z"),
@@ -460,4 +523,32 @@ const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "ident
   state: overrides.state ?? "unstarted",
   teamStates: overrides.teamStates ?? [],
   title: overrides.title,
+  workspaceSlug: overrides.workspaceSlug,
 })
+
+const filterIssuesByWorkspace = (issues: ReadonlyArray<TestLinearIssue>, workspaceSlug: string | undefined) => {
+  const normalizedWorkspaceSlug = workspaceSlug?.trim().toLowerCase()
+
+  return normalizedWorkspaceSlug === undefined || normalizedWorkspaceSlug.length === 0
+    ? issues
+    : issues.filter((issue) => issue.workspaceSlug?.toLowerCase() === normalizedWorkspaceSlug)
+}
+
+const makeRepoConfigData = (overrides: { readonly linearLabel?: string | undefined; readonly linearWorkspace?: string | undefined }) =>
+  new RepoConfigData({
+    agent: "opencode",
+    agentArgs: [],
+    agentTimeoutMinutes: 45,
+    baseBranch: "main",
+    branchPrefix: "orca",
+    cleanupWorktreeOnSuccess: true,
+    draftPr: true,
+    greptilePollIntervalSeconds: 30,
+    linearLabel: overrides.linearLabel ?? "Orca",
+    ...(overrides.linearWorkspace === undefined ? {} : { linearWorkspace: overrides.linearWorkspace }),
+    maxWaitingPullRequests: 4,
+    repo: "peterje/orca",
+    setup: ["bun install"],
+    stallTimeoutMinutes: 10,
+    verify: ["bun run check"],
+  })

@@ -120,7 +120,7 @@ export const RunnerLive = Effect.gen(function* () {
       return Option.some({ config, kind: "review", review } satisfies SelectedWork)
     }
 
-    const issues = yield* linear.issues.pipe(Effect.mapError(toRunnerFailure))
+    const issues = yield* linear.issues({ workspaceSlug: config.linearWorkspace }).pipe(Effect.mapError(toRunnerFailure))
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
     const issue = plan.actionable.find((candidate) => !trackedIssueIds.has(candidate.id))
     if (!issue) {
@@ -167,7 +167,7 @@ export const RunnerLive = Effect.gen(function* () {
 
           if (
             latestGreptileReview === null
-            || latestGreptileReview.review.createdAtMs < waitingSince
+            || latestGreptileReview.createdAtMs < waitingSince
             || latestGreptileReview.achieved !== 5
             || latestGreptileReview.total !== 5
           ) {
@@ -182,7 +182,7 @@ export const RunnerLive = Effect.gen(function* () {
 
           const updatedPullRequest = yield* pullRequestStore.markGreptileCompleted({
             completedAtMs: Date.now(),
-            lastReviewedAtMs: latestGreptileReview.review.createdAtMs,
+            lastReviewedAtMs: latestGreptileReview.createdAtMs,
             prNumber: pullRequest.prNumber,
             repo: pullRequest.repo,
           }).pipe(Effect.mapError(toRunnerFailure))
@@ -390,6 +390,7 @@ const runImplementation = (options: {
         github: options.github,
         issueIdentifier: options.issue.identifier,
         issueTitle: options.issue.title,
+        issueWorkspaceSlug: options.issue.workspaceSlug,
         worktree: managedWorktree,
       }).pipe(Effect.mapError(toRunnerFailure))
 
@@ -872,6 +873,7 @@ const finalizeGitAndPullRequest = (options: {
   readonly github: GitHubService
   readonly issueIdentifier: string
   readonly issueTitle: string
+  readonly issueWorkspaceSlug?: string | undefined
   readonly worktree: ManagedWorktree
 }): Effect.Effect<FinalizedPullRequest, RunnerFailure> =>
   Effect.gen(function* () {
@@ -918,7 +920,12 @@ const finalizeGitAndPullRequest = (options: {
 
     const pullRequest = yield* options.github.createPullRequest({
       baseBranch: options.config.baseBranch,
-      body: makePullRequestBody(options.issueIdentifier, options.issueTitle, options.config.verify),
+      body: makePullRequestBody({
+        issueIdentifier: options.issueIdentifier,
+        issueTitle: options.issueTitle,
+        issueWorkspaceSlug: options.issueWorkspaceSlug,
+        verify: options.config.verify,
+      }),
       cwd: options.worktree.directory,
       draft: options.config.draftPr,
       repo: options.config.repo,
@@ -980,21 +987,34 @@ const makeReviewCommitMessage = (pullRequest: OrcaManagedPullRequest) =>
 const makePullRequestTitle = (issueTitle: string) =>
   `feat: ${issueTitle.trim().toLowerCase()}`
 
-const makePullRequestBody = (issueIdentifier: string, issueTitle: string, verify: ReadonlyArray<string>) =>
+const makePullRequestBody = (options: {
+  readonly issueIdentifier: string
+  readonly issueTitle: string
+  readonly issueWorkspaceSlug?: string | undefined
+  readonly verify: ReadonlyArray<string>
+}) =>
   [
-    `this pr brings ${issueTitle.trim().toLowerCase()} into the repo so the requested behavior is ready for review.`,
+    "**closes**",
+    makeLinearIssueReference(options.issueIdentifier, options.issueWorkspaceSlug),
     "",
-    "### changes",
-    `#### 1. deliver ${issueTitle.trim().toLowerCase()}`,
-    "this keeps the branch focused on the requested outcome and ready for the usual review flow.",
+    "**summary**",
+    makePullRequestSummary(options.issueTitle),
     "",
-    "### verification",
-    ...(verify.length > 0
-      ? verify.map((command) => `- \`${command}\``)
+    "**verification**",
+    ...(options.verify.length > 0
+      ? options.verify.map((command) => `- \`${command}\``)
       : ["- no verification commands were configured."]),
-    "",
-    `closes ${issueIdentifier}`,
   ].join("\n")
+
+const makePullRequestSummary = (issueTitle: string) =>
+  `this updates ${issueTitle.trim().toLowerCase()} so the pull request stays tied to the ticket and gives reviewers a clear explanation of the requested outcome.`
+
+const makeLinearIssueReference = (issueIdentifier: string, workspaceSlug: string | undefined) => {
+  const normalizedWorkspaceSlug = workspaceSlug?.trim().toLowerCase()
+  return normalizedWorkspaceSlug && normalizedWorkspaceSlug.length > 0
+    ? `[${issueIdentifier}](https://linear.app/${normalizedWorkspaceSlug}/issue/${issueIdentifier})`
+    : issueIdentifier
+}
 
 const isWaitingForGreptileReview = (
   pullRequest: OrcaManagedPullRequest,

@@ -68,16 +68,14 @@ describe("Runner", () => {
           {
             baseBranch: "main",
             body: [
-              "this pr brings example issue into the repo so the requested behavior is ready for review.",
+              "**closes**",
+              "[ENG-1](https://linear.app/peteredm/issue/ENG-1)",
               "",
-              "### changes",
-              "#### 1. deliver example issue",
-              "this keeps the branch focused on the requested outcome and ready for the usual review flow.",
+              "**summary**",
+              "this updates example issue so the pull request stays tied to the ticket and gives reviewers a clear explanation of the requested outcome.",
               "",
-              "### verification",
+              "**verification**",
               "- `bun run check`",
-              "",
-              "closes ENG-1",
             ].join("\n"),
             cwd: worktreeDirectory,
             draft: true,
@@ -235,6 +233,7 @@ describe("Runner", () => {
                     isBot: true,
                     originalLine: 1,
                     path: "apps/cli/src/runner.ts",
+                    updatedAtMs: 5,
                   },
                 ],
                 isCollapsed: false,
@@ -248,6 +247,7 @@ describe("Runner", () => {
                 createdAtMs: 20,
                 id: "review-1",
                 isBot: true,
+                updatedAtMs: 20,
               },
               {
                 authorLogin: "greptile-apps[bot]",
@@ -255,6 +255,7 @@ describe("Runner", () => {
                 createdAtMs: 30,
                 id: "review-2",
                 isBot: true,
+                updatedAtMs: 30,
               },
             ],
             url: "https://github.com/peterje/orca/pull/42",
@@ -269,6 +270,121 @@ describe("Runner", () => {
             prNumber: 42,
             prUrl: "https://github.com/peterje/orca/pull/42",
             waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
+  it.effect("marks waiting pull requests ready for review when the latest Greptile score is posted as a comment", () => {
+    const greptileCompletedPullRequests: Array<{
+      readonly completedAtMs: number
+      readonly lastReviewedAtMs: number
+      readonly prNumber: number
+      readonly repo: string
+    }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft?: boolean | undefined; readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        expect(yield* runner.peekNext).toEqual(Option.none())
+
+        yield* runner.pollWaitingPullRequests
+
+        expect(readyForReviewRequests).toEqual([{ isDraft: true, pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(greptileCompletedPullRequests).toHaveLength(1)
+        expect(greptileCompletedPullRequests[0]).toMatchObject({
+          lastReviewedAtMs: 30,
+          prNumber: 42,
+          repo: "peterje/orca",
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        greptileCompletedPullRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [
+              comment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence Score: 5/5\n\nSafe to merge.",
+                createdAtMs: 30,
+                id: "comment-2",
+                isBot: true,
+              }),
+            ],
+            isDraft: true,
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        readyForReviewRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
+  it.effect("marks waiting pull requests ready for review when Greptile edits an existing score comment", () => {
+    const greptileCompletedPullRequests: Array<{
+      readonly completedAtMs: number
+      readonly lastReviewedAtMs: number
+      readonly prNumber: number
+      readonly repo: string
+    }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft?: boolean | undefined; readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        yield* runner.pollWaitingPullRequests
+
+        expect(readyForReviewRequests).toEqual([{ isDraft: true, pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(greptileCompletedPullRequests).toHaveLength(1)
+        expect(greptileCompletedPullRequests[0]).toMatchObject({
+          lastReviewedAtMs: 30,
+          prNumber: 42,
+          repo: "peterje/orca",
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        greptileCompletedPullRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [
+              comment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence Score: 5/5\n\nSafe to merge.",
+                createdAtMs: 10,
+                id: "comment-2",
+                isBot: true,
+                updatedAtMs: 30,
+              }),
+            ],
+            isDraft: true,
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        readyForReviewRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 20,
           }),
         ],
         worktreeDirectory: join(tempDirectory, "worktree"),
@@ -299,6 +415,7 @@ describe("Runner", () => {
                 createdAtMs: 30,
                 id: "review-2",
                 isBot: true,
+                updatedAtMs: 30,
               },
             ],
             url: "https://github.com/peterje/orca/pull/42",
@@ -444,6 +561,7 @@ describe("Runner", () => {
                 createdAtMs: 30,
                 id: "review-2",
                 isBot: true,
+                updatedAtMs: 30,
               },
             ],
             url: "https://github.com/peterje/orca/pull/42",
@@ -767,6 +885,48 @@ describe("Runner", () => {
             comments: [comment({ authorLogin: "reviewer", body: "Human note", createdAtMs: 12 })],
             number: 42,
             reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 10, isBot: true })],
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    ))
+
+  it.effect("prioritizes actionable review work when Greptile posts the score as a comment", () =>
+    withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const next = yield* runner.peekNext
+
+        expect(Option.getOrNull(next)).toMatchObject({
+          id: "peterje/orca#42",
+          issueIdentifier: "ENG-1",
+          kind: "review",
+          pullRequestNumber: 42,
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "New work" })],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [
+              comment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence Score: 4/5\n\nPlease tighten this up.",
+                createdAtMs: 10,
+                isBot: true,
+              }),
+            ],
+            number: 42,
             url: "https://github.com/peterje/orca/pull/42",
           }),
         },
@@ -1240,9 +1400,11 @@ const makeRunnerLayer = (options: {
               Effect.sync(() => {
                 linearComments.push(request)
               }),
-            issues: Effect.succeed(
-              options.issues ?? [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Example issue" })],
-            ),
+            issues: (request) =>
+              Effect.succeed(filterIssuesByWorkspace(
+                options.issues ?? [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Example issue" })],
+                request?.workspaceSlug,
+              )),
             markIssueInProgress: () => Effect.void,
             viewer: Effect.die("not used in this test"),
           }),
@@ -1369,6 +1531,7 @@ const makeRunnerLayer = (options: {
               draftPr: true,
               greptilePollIntervalSeconds: 30,
               linearLabel: "Orca",
+              linearWorkspace: undefined,
               maxWaitingPullRequests: 4,
               repo: "peterje/orca",
               setup: ["bun install"],
@@ -1467,6 +1630,7 @@ const comment = (overrides?: Partial<PullRequestFeedback["comments"][number]>) =
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "comment-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => ({
@@ -1475,6 +1639,7 @@ const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => 
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "review-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][number]["comments"][number]>) => ({
@@ -1486,6 +1651,7 @@ const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][
   isBot: overrides?.isBot ?? false,
   originalLine: overrides?.originalLine ?? 1,
   path: overrides?.path ?? "apps/cli/src/runner.ts",
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const makeManagedWorktree = (options: {
@@ -1552,7 +1718,16 @@ const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "ident
   state: overrides.state ?? "unstarted",
   teamStates: overrides.teamStates ?? [],
   title: overrides.title,
+  workspaceSlug: overrides.workspaceSlug ?? "peteredm",
 })
+
+const filterIssuesByWorkspace = (issues: ReadonlyArray<LinearIssue>, workspaceSlug: string | undefined) => {
+  const normalizedWorkspaceSlug = workspaceSlug?.trim().toLowerCase()
+
+  return normalizedWorkspaceSlug === undefined || normalizedWorkspaceSlug.length === 0
+    ? issues
+    : issues.filter((issue) => ("workspaceSlug" in issue ? String((issue as LinearIssue & { readonly workspaceSlug?: string }).workspaceSlug ?? "").toLowerCase() : "") === normalizedWorkspaceSlug)
+}
 
 const withTempDirectory = <A, E, R>(use: (tempDirectory: string) => Effect.Effect<A, E, R>) =>
   Effect.acquireRelease(

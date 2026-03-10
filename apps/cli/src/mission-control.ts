@@ -58,7 +58,7 @@ export const MissionControlLive = Effect.gen(function* () {
     )
     const pendingReviews = trackedPullRequestQueue.pendingReviews.filter((review) => review.pullRequest.issueId !== currentIssueId)
     const trackedIssueIds = new Set(trackedPullRequestQueue.openPullRequests.map((pullRequest) => pullRequest.issueId))
-    const issues = yield* linear.issues
+    const issues = yield* linear.issues({ workspaceSlug: config.linearWorkspace })
     const plan = planIssues(issues, { linearLabel: config.linearLabel })
     const actionableIssues = plan.actionable.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))
     const blockedIssues = plan.blocked.filter((issue) => issue.id !== currentIssueId && !trackedIssueIds.has(issue.id))

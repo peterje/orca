@@ -30,6 +30,7 @@ describe("PromptGen", () => {
           stateName: "Unstarted",
           teamStates: [],
           title: "Improve PR styling",
+          workspaceSlug: "peteredm",
         },
         plan: {
           actionable: [],
@@ -39,9 +40,12 @@ describe("PromptGen", () => {
         verify: ["bun run check", "bun run test"],
       })
 
+      expect(result.promptFileContents).toContain("- Use a conventional commit message if you create a commit.")
       expect(result.promptFileContents).toContain("- If you open a PR, use a lowercase conventional commit title.")
       expect(result.promptFileContents).toContain("- Create the PR with `gh pr create` and a HEREDOC body so the formatting is preserved.")
-      expect(result.promptFileContents).toContain("- Write the PR body in lowercase narrative prose, use only `###` and `####` headings, include the verification commands you ran under `### verification`, and end with `closes PET-20`.")
+      expect(result.promptFileContents).toContain("- Write the PR body with bold section labels instead of markdown headings: `**closes**`, `**summary**`, and `**verification**`.")
+      expect(result.promptFileContents).toContain("- Under `**closes**`, link the Linear ticket as `[PET-20](https://linear.app/peteredm/issue/PET-20)`.")
+      expect(result.promptFileContents).toContain("- Make the `**summary**` section a readable narrative that explains what changed and why it matters, and avoid file-by-file implementation details.")
     }).pipe(Effect.provide(makePromptGenLayer())))
 
   it.effect("guides review follow-up around Greptile feedback", () =>
@@ -62,6 +66,8 @@ describe("PromptGen", () => {
       expect(result.promptFileContents).toContain("## Greptile review feedback")
       expect(result.promptFileContents).toContain("- Address the requested Greptile feedback and keep the existing pull request moving.")
       expect(result.promptFileContents).toContain("- Have the existing branch ready for another Greptile review pass.")
+      expect(result.promptFileContents).toContain("- Use a conventional commit message every time you create a commit.")
+      expect(result.promptFileContents).toContain("- If you update the PR description, keep the same lowercase narrative format with `**closes**`, `**summary**`, and `**verification**`.")
     }).pipe(Effect.provide(makePromptGenLayer())))
 
   it.effect("guides merge conflict follow-up after weave leaves conflicts behind", () =>
@@ -83,6 +89,7 @@ describe("PromptGen", () => {
       expect(result.promptFileContents).toContain("weave-backed merge")
       expect(result.promptFileContents).toContain("apps/cli/src/runner.ts")
       expect(result.promptFileContents).toContain("- Resolve all remaining merge conflicts before finishing.")
+      expect(result.promptFileContents).toContain("- Use a conventional commit message every time you create a commit.")
     }).pipe(Effect.provide(makePromptGenLayer())))
 })
 

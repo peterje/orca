@@ -22,7 +22,7 @@ export type PendingPullRequestReview = {
 
 export type GreptileReviewScore = {
   readonly achieved: number
-  readonly review: PullRequestReview
+  readonly createdAtMs: number
   readonly total: number
 }
 
@@ -42,27 +42,28 @@ export const findPendingPullRequestReview = (options: {
     options.pullRequest.lastReviewedAtMs ?? 0,
     options.pullRequest.waitingForGreptileReviewSinceMs ?? 0,
   )
-  const greptileReviews = options.feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review))
-  const latestGreptileReview = findLatestEntry(greptileReviews)
-  if (latestGreptileReview === null || latestGreptileReview.createdAtMs <= since) {
+  const latestGreptileScoreEntry = findLatestGreptileScoreEntry(options.feedback)
+  if (latestGreptileScoreEntry === null || getEntryActivityAtMs(latestGreptileScoreEntry) <= since) {
     return null
   }
 
-  const reviewScore = parsePendingGreptileReviewScore(latestGreptileReview.body)
+  const reviewScore = parsePendingGreptileReviewScore(latestGreptileScoreEntry.body)
   if (reviewScore === null || reviewScore.value >= reviewScore.maximum) {
     return null
   }
+
+  const greptileReviews = options.feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review))
 
   const unresolvedThreads = options.feedback.reviewThreads
     .map(stripGreptileThreadComments)
     .filter((thread): thread is PullRequestReviewThread => thread !== null)
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
   const recentUnresolvedThreads = unresolvedThreads.filter((thread) =>
-    thread.comments.some((comment) => comment.createdAtMs > since))
+    thread.comments.some((comment) => getEntryActivityAtMs(comment) > since))
   const recentComments = options.feedback.comments.filter(
-    (comment) => comment.createdAtMs > since && isGreptileEntry(comment),
+    (comment) => getEntryActivityAtMs(comment) > since && isGreptileEntry(comment),
   )
-  const recentReviews = greptileReviews.filter((review) => review.createdAtMs > since)
+  const recentReviews = greptileReviews.filter((review) => getEntryActivityAtMs(review) > since)
   const feedbackPresent = recentUnresolvedThreads.length > 0
     || recentComments.length > 0
     || recentReviews.length > 0
@@ -72,10 +73,10 @@ export const findPendingPullRequestReview = (options: {
   }
 
   const latestFeedbackAtMs = Math.max(
-    latestGreptileReview.createdAtMs,
-    ...recentComments.map((comment) => comment.createdAtMs),
-    ...recentReviews.map((review) => review.createdAtMs),
-    ...recentUnresolvedThreads.flatMap((thread) => thread.comments.map((comment) => comment.createdAtMs)),
+    getEntryActivityAtMs(latestGreptileScoreEntry),
+    ...recentComments.map(getEntryActivityAtMs),
+    ...recentReviews.map(getEntryActivityAtMs),
+    ...recentUnresolvedThreads.flatMap((thread) => thread.comments.map(getEntryActivityAtMs)),
   )
 
   return {
@@ -93,7 +94,7 @@ export const findPendingPullRequestReview = (options: {
 }
 
 export const findLatestGreptileReviewScore = (feedback: PullRequestFeedback): GreptileReviewScore | null => {
-  const latestReview = findLatestEntry(feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review)))
+  const latestReview = findLatestGreptileScoreEntry(feedback)
 
   if (latestReview === null) {
     return null
@@ -106,7 +107,7 @@ export const findLatestGreptileReviewScore = (feedback: PullRequestFeedback): Gr
 
   return {
     ...score,
-    review: latestReview,
+    createdAtMs: getEntryActivityAtMs(latestReview),
   }
 }
 
@@ -167,6 +168,17 @@ const renderGreptileReviewMarkdown = (options: {
   return sections.join("\n")
 }
 
+const findLatestGreptileScoreEntry = (feedback: PullRequestFeedback) =>
+  findLatestEntry([
+    ...feedback.comments.filter((comment) =>
+      comment.body.trim().length > 0 && isGreptileEntry(comment) && parseGreptileScore(comment.body) !== null),
+    ...feedback.reviews.filter((review) =>
+      review.body.trim().length > 0 && isGreptileEntry(review) && parseGreptileScore(review.body) !== null),
+  ])
+
+const getEntryActivityAtMs = (entry: { readonly createdAtMs: number; readonly updatedAtMs: number }) =>
+  Math.max(entry.createdAtMs, entry.updatedAtMs)
+
 const renderReviewThread = (thread: PullRequestReviewThread) =>
   renderReviewComment(thread.comments[0]!, thread.comments.slice(1))
 
@@ -199,11 +211,11 @@ const renderGeneralComment = (comment: PullRequestComment) => `  <comment author
     <body>${comment.body}</body>
   </comment>`
 
-const findLatestEntry = <A extends { readonly createdAtMs: number }>(entries: ReadonlyArray<A>): A | null => {
+const findLatestEntry = <A extends { readonly createdAtMs: number; readonly updatedAtMs: number }>(entries: ReadonlyArray<A>): A | null => {
   let latest: A | null = null
 
   for (const entry of entries) {
-    if (latest === null || entry.createdAtMs > latest.createdAtMs) {
+    if (latest === null || getEntryActivityAtMs(entry) > getEntryActivityAtMs(latest)) {
       latest = entry
     }
   }
@@ -216,7 +228,7 @@ const parsePendingGreptileReviewScore = (body: string): PendingGreptileReviewSco
   return score === null ? null : { maximum: score.total, value: score.achieved }
 }
 
-const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "review"> | null => {
+const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "createdAtMs"> | null => {
   const match = body.match(/\b(?:confidence|score)\b[^\d]*(\d+)\s*\/\s*(\d+)\b/i)
   if (match === null) {
     return null

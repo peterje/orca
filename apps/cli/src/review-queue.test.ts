@@ -26,6 +26,56 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).toContain("Please keep this branch scoped.")
   })
 
+  it("selects failing Greptile feedback when the score arrives as a general comment", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [
+          comment({
+            authorLogin: "greptile-apps[bot]",
+            body: "Confidence Score: 4/5\n\nPlease keep this branch scoped.",
+            createdAtMs: 60,
+            isBot: true,
+          }),
+        ],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 55, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
+    expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.feedbackMarkdown).toContain("Please keep this branch scoped.")
+  })
+
+  it("treats an edited Greptile score comment as fresh feedback", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [
+          comment({
+            authorLogin: "greptile-apps[bot]",
+            body: "Confidence Score: 4/5\n\nPlease keep this branch scoped.",
+            createdAtMs: 10,
+            isBot: true,
+            updatedAtMs: 120,
+          }),
+        ],
+      }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.latestFeedbackAtMs).toBe(120)
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+  })
+
   it("ignores human review feedback in the Greptile loop", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
@@ -106,6 +156,29 @@ describe("review queue", () => {
       reviews: [
         review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 10, id: "review-1" }),
         review({ authorLogin: "greptile-apps-staging[bot]", body: "Confidence: 5/5", createdAtMs: 20, id: "review-3" }),
+      ],
+    }), 5, 5)).toBe(true)
+  })
+
+  it("parses the latest Greptile score from general comments", () => {
+    const latestScore = findLatestGreptileReviewScore(feedback({
+      comments: [
+        comment({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 10, id: "comment-1", isBot: true }),
+        comment({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 20, id: "comment-2", isBot: true }),
+      ],
+      reviews: [
+        review({ authorLogin: "reviewer", body: "human review", createdAtMs: 15, id: "review-1" }),
+      ],
+    }))
+
+    expect(latestScore).toMatchObject({
+      achieved: 5,
+      createdAtMs: 20,
+      total: 5,
+    })
+    expect(hasLatestGreptileReviewScore(feedback({
+      comments: [
+        comment({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 20, id: "comment-2", isBot: true }),
       ],
     }), 5, 5)).toBe(true)
   })
@@ -194,6 +267,7 @@ const comment = (overrides?: Partial<PullRequestFeedback["comments"][number]>) =
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "comment-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => ({
@@ -202,6 +276,7 @@ const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => 
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "review-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][number]["comments"][number]>) => ({
@@ -213,4 +288,5 @@ const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][
   isBot: overrides?.isBot ?? false,
   originalLine: overrides?.originalLine ?? 1,
   path: overrides?.path ?? "apps/cli/src/runner.ts",
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })

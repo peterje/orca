@@ -8,7 +8,7 @@ describe("Linear", () => {
   it.effect("fetches paginated issues and maps Orca labels and blockers", () =>
     Effect.gen(function* () {
       const linear = yield* Linear
-      const issues = yield* linear.issues
+      const issues = yield* linear.issues()
 
       expect(issues.map((issue) => issue.identifier)).toEqual(["ENG-3", "ENG-2", "ENG-1"])
       expect(issues[2]).toMatchObject({
@@ -17,6 +17,7 @@ describe("Linear", () => {
         identifier: "ENG-1",
         isOrcaTagged: true,
         parentId: null,
+        workspaceSlug: "peteredm",
       })
       expect(issues[1]).toMatchObject({
         identifier: "ENG-2",
@@ -36,7 +37,7 @@ describe("Linear", () => {
   it.effect("suggests reauth when Linear rejects a write operation for missing scope", () =>
     Effect.gen(function* () {
       const linear = yield* Linear
-      const issues = yield* linear.issues
+      const issues = yield* linear.issues()
       const error = yield* Effect.flip(linear.markIssueInProgress(issues[0]!))
 
       expect(error).toBeInstanceOf(LinearApiError)
@@ -49,7 +50,7 @@ describe("Linear", () => {
 
     return Effect.gen(function* () {
       const linear = yield* Linear
-      const issues = yield* linear.issues
+      const issues = yield* linear.issues()
 
       yield* linear.markIssueInProgress(issues.find((issue) => issue.identifier === "ENG-1")!)
 
@@ -65,6 +66,9 @@ describe("Linear", () => {
           makeGraphqlClient({
             issueNodeOverrides: {
               team: {
+                organization: {
+                  urlKey: "peteredm",
+                },
                 states: {
                   nodes: [
                     {
@@ -95,7 +99,7 @@ describe("Linear", () => {
 
     return Effect.gen(function* () {
       const linear = yield* Linear
-      const issues = yield* linear.issues
+      const issues = yield* linear.issues()
 
       yield* linear.markIssueInProgress(issues.find((issue) => issue.identifier === "ENG-1")!)
 
@@ -106,6 +110,9 @@ describe("Linear", () => {
           makeGraphqlClient({
             issueNodeOverrides: {
               team: {
+                organization: {
+                  urlKey: "peteredm",
+                },
                 states: {
                   nodes: [
                     {
@@ -131,7 +138,7 @@ describe("Linear", () => {
 
     return Effect.gen(function* () {
       const linear = yield* Linear
-      const issues = yield* linear.issues
+      const issues = yield* linear.issues()
 
       yield* linear.markIssueInProgress(issues.find((issue) => issue.identifier === "ENG-1")!)
 
@@ -147,6 +154,9 @@ describe("Linear", () => {
           makeGraphqlClient({
             issueNodeOverrides: {
               team: {
+                organization: {
+                  urlKey: "peteredm",
+                },
                 states: {
                   nodes: [
                     {
@@ -171,6 +181,14 @@ describe("Linear", () => {
       ),
     )
   })
+
+  it.effect("filters issues by workspace slug when configured", () =>
+    Effect.gen(function* () {
+      const linear = yield* Linear
+      const issues = yield* linear.issues({ workspaceSlug: "coteachai" })
+
+      expect(issues.map((issue) => issue.identifier)).toEqual(["ENG-3"])
+    }).pipe(Effect.provide(makeLinearTestLayer(makeGraphqlClient()))))
 })
 
 const makeLinearTestLayer = (httpClientLayer: Layer.Layer<HttpClient.HttpClient>) =>
@@ -262,6 +280,7 @@ const makeGraphqlClient = (options?: {
                     description: "Direct issue description",
                     labels: { nodes: [{ id: "label-1", name: "oRcA" }] },
                     priority: 2,
+                    team: teamNode("peteredm"),
                     title: "Direct Orca issue",
                     ...options?.issueNodeOverrides,
                   }),
@@ -271,6 +290,7 @@ const makeGraphqlClient = (options?: {
                     identifier: "ENG-3",
                     labels: { nodes: [] },
                     priority: 4,
+                    team: teamNode("coteachai"),
                     title: "Unrelated issue",
                   }),
                 ],
@@ -300,6 +320,7 @@ const makeGraphqlClient = (options?: {
                     identifier: "ENG-1",
                   },
                   priority: 3,
+                  team: teamNode("peteredm"),
                   title: "Open child",
                 }),
               ],
@@ -380,22 +401,29 @@ const baseLinearNode = () => ({
     type: "unstarted",
   },
   team: {
-    states: {
-      nodes: [
-        {
-          id: "state-backlog",
-          name: "Backlog",
-          type: "backlog",
-        },
-        {
-          id: "state-started",
-          name: "In Progress",
-          type: "started",
-        },
-      ],
-    },
+    ...teamNode("peteredm"),
   },
   title: "Issue",
+})
+
+const teamNode = (urlKey: string) => ({
+  organization: {
+    urlKey,
+  },
+  states: {
+    nodes: [
+      {
+        id: "state-backlog",
+        name: "Backlog",
+        type: "backlog",
+      },
+      {
+        id: "state-started",
+        name: "In Progress",
+        type: "started",
+      },
+    ],
+  },
 })
 
 const tokens = (accessToken: string, expiresAtMs: number) =>
