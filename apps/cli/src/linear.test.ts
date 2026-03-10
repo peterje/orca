@@ -17,6 +17,7 @@ describe("Linear", () => {
         identifier: "ENG-1",
         isOrcaTagged: true,
         parentId: null,
+        workspaceSlug: "peteredm",
       })
       expect(issues[1]).toMatchObject({
         identifier: "ENG-2",
