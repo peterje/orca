@@ -11,7 +11,7 @@ export const OrcaEvents = ServiceMap.Service<OrcaEventsService>("orca/OrcaEvents
 export const OrcaEventsLayer = Layer.effect(
   OrcaEvents,
   Effect.gen(function* () {
-    const pubsub = yield* PubSub.unbounded<OrcaServerEvent>({ replay: 128 })
+    const pubsub = yield* PubSub.unbounded<OrcaServerEvent>()
 
     return OrcaEvents.of({
       publish: (event) => PubSub.publish(pubsub, event).pipe(Effect.asVoid),

@@ -70,6 +70,32 @@ export const OrcaClientLayer = Layer.effect(
         )),
     )
 
+    const readStartupLockOption = Effect.gen(function* () {
+      const raw = yield* fs.readFileString(lockFile).pipe(Effect.orElseSucceed(() => null))
+      if (raw === null) {
+        return Option.none<typeof OrcaServerStartupLockData.Type>()
+      }
+
+      const json = (() => {
+        try {
+          return JSON.parse(raw)
+        } catch {
+          return null
+        }
+      })()
+
+      if (json === null) {
+        return Option.none<typeof OrcaServerStartupLockData.Type>()
+      }
+
+      const lock = yield* Schema.decodeUnknownEffect(OrcaServerStartupLockData)(json).pipe(Effect.orElseSucceed(() => null))
+      if (lock === null) {
+        return Option.none<typeof OrcaServerStartupLockData.Type>()
+      }
+
+      return Option.some(lock)
+    })
+
     const removeControlFile = fs.remove(controlFile).pipe(Effect.catch(() => Effect.void))
     const removeLockFile = fs.remove(lockFile).pipe(Effect.catch(() => Effect.void))
 
@@ -135,6 +161,12 @@ export const OrcaClientLayer = Layer.effect(
         const controlOption = yield* readControlOption
         if (Option.isSome(controlOption) && (yield* isServerReady(controlOption.value))) {
           return false as const
+        }
+
+        const startupLockOption = yield* readStartupLockOption
+        if (Option.isSome(startupLockOption) && !isPidRunning(startupLockOption.value.pid)) {
+          yield* removeLockFile
+          continue
         }
 
         yield* Effect.sleep("100 millis")
@@ -280,10 +312,21 @@ const decodeJson = <A, I, RD, RE>(schema: Schema.Codec<A, I, RD, RE>, message: s
     Effect.mapError((cause) => new OrcaClientError({ message, cause })),
   )
 
-const isFileAlreadyExistsError = (cause: unknown) =>
-  cause instanceof PlatformError.PlatformError
-  && cause.reason instanceof PlatformError.SystemError
-  && cause.reason._tag === "AlreadyExists"
+const isFileAlreadyExistsError = (cause: unknown) => {
+  if (!(cause instanceof PlatformError.PlatformError) && !hasTag(cause, "PlatformError")) {
+    return false
+  }
+
+  if (!hasReason(cause)) {
+    return false
+  }
+
+  const reason = cause.reason
+
+  return reason === "AlreadyExists"
+    || reason instanceof PlatformError.SystemError && reason._tag === "AlreadyExists"
+    || hasTag(reason, "AlreadyExists")
+}
 
 const decodeErrorResponse = (response: Response) =>
   Effect.gen(function* () {
@@ -330,3 +373,9 @@ const isPidRunning = (pid: number) => {
     return false
   }
 }
+
+const hasTag = <Tag extends string>(value: unknown, tag: Tag): value is { readonly _tag: Tag } =>
+  typeof value === "object" && value !== null && "_tag" in value && value._tag === tag
+
+const hasReason = (value: unknown): value is { readonly reason: unknown } =>
+  typeof value === "object" && value !== null && "reason" in value
