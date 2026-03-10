@@ -6,7 +6,7 @@ import { LinearAuthRequiredError, LinearOAuthError } from "./linear/token-manage
 import { MissionControlError, MissionControlSnapshotData, type MissionControlSnapshot } from "./mission-control.ts"
 import { resolveOrcaDirectory } from "./orca-directory.ts"
 import { OrcaServerControlData, OrcaServerErrorResponse, RunnerResultData } from "./orca-server-protocol.ts"
-import { RepoConfigError } from "./repo-config.ts"
+import { RepoConfig, RepoConfigError, type RepoConfigData } from "./repo-config.ts"
 import { RunnerFailure, RunnerNoWorkError, type RunnerResult } from "./runner.ts"
 import { RunStateBusyError } from "./run-state.ts"
 
@@ -36,6 +36,7 @@ export const OrcaClientLayer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const orcaDirectory = yield* resolveOrcaDirectory()
+    const repoConfig = yield* RepoConfig
     const controlFile = `${orcaDirectory}/server.json`
     const lockFile = `${orcaDirectory}/server.lock`
 
@@ -63,7 +64,7 @@ export const OrcaClientLayer = Layer.effect(
 
       return Option.some(control)
     }).pipe(
-      Effect.catch(() =>
+      Effect.catchDefect(() =>
         Effect.andThen(
           fs.remove(controlFile).pipe(Effect.catch(() => Effect.void)),
           Effect.succeed(Option.none<typeof OrcaServerControlData.Type>()),
@@ -212,22 +213,48 @@ export const OrcaClientLayer = Layer.effect(
       }).pipe(Effect.ensuring(removeLockFile))
     })
 
+    const fetchServerResponse = (options: {
+      readonly control: typeof OrcaServerControlData.Type
+      readonly method: "GET" | "POST"
+      readonly path: string
+      readonly timeoutMs?: number
+    }) =>
+      Effect.tryPromise({
+        try: () =>
+          fetchWithTimeout(
+            `${options.control.baseUrl}${options.path}`,
+            {
+              headers: {
+                authorization: `Bearer ${options.control.token}`,
+              },
+              method: options.method,
+            },
+            options.timeoutMs === undefined
+              ? undefined
+              : {
+                  message: `Timed out waiting ${formatTimeoutDuration(options.timeoutMs)} for the local Orca server to respond to ${options.method} ${options.path}.`,
+                  timeoutMs: options.timeoutMs,
+                },
+          ),
+        catch: (cause) =>
+          cause instanceof OrcaClientError
+            ? cause
+            : new OrcaClientError({ message: `Failed to contact the local Orca server at ${options.control.baseUrl}.`, cause }),
+      })
+
     const request = <A>(options: {
       readonly decode: (json: unknown) => Effect.Effect<A, OrcaClientRequestError>
       readonly method: "GET" | "POST"
       readonly path: string
+      readonly timeoutMs?: number
     }) =>
       Effect.gen(function* () {
         const control = yield* ensureServer
-        const response = yield* Effect.tryPromise({
-          try: () =>
-            fetch(`${control.baseUrl}${options.path}`, {
-              headers: {
-                authorization: `Bearer ${control.token}`,
-              },
-              method: options.method,
-            }),
-          catch: (cause) => new OrcaClientError({ message: `Failed to contact the local Orca server at ${control.baseUrl}.`, cause }),
+        const response = yield* fetchServerResponse({
+          control,
+          method: options.method,
+          path: options.path,
+          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         })
 
         if (!response.ok) {
@@ -245,15 +272,10 @@ export const OrcaClientLayer = Layer.effect(
     const requestVoid = (path: string) =>
       Effect.gen(function* () {
         const control = yield* ensureServer
-        const response = yield* Effect.tryPromise({
-          try: () =>
-            fetch(`${control.baseUrl}${path}`, {
-              headers: {
-                authorization: `Bearer ${control.token}`,
-              },
-              method: "POST",
-            }),
-          catch: (cause) => new OrcaClientError({ message: `Failed to contact the local Orca server at ${control.baseUrl}.`, cause }),
+        const response = yield* fetchServerResponse({
+          control,
+          method: "POST",
+          path,
         })
 
         if (!response.ok) {
@@ -281,10 +303,15 @@ export const OrcaClientLayer = Layer.effect(
 
     const pollWaitingPullRequests = requestVoid("/runner/poll-waiting-pull-requests")
 
-    const runNext = request({
-      decode: decodeJson(RunnerResultData, "The local Orca server returned an invalid runner result."),
-      method: "POST",
-      path: "/runner/run-next",
+    const runNext = Effect.gen(function* () {
+      const config = yield* repoConfig.readOption
+
+      return yield* request({
+        decode: decodeJson(RunnerResultData, "The local Orca server returned an invalid runner result."),
+        method: "POST",
+        path: "/runner/run-next",
+        timeoutMs: toRunNextTimeoutMs(config),
+      })
     })
 
     return OrcaClient.of({
@@ -302,6 +329,8 @@ export class OrcaClientError extends Data.TaggedError("OrcaClientError")<{
   readonly cause?: unknown
 }> {}
 
+const defaultRunNextTimeoutBufferMinutes = 5
+
 const OrcaServerStartupLockData = Schema.Struct({
   pid: Schema.Number,
   startedAtMs: Schema.Number,
@@ -311,6 +340,47 @@ const decodeJson = <A, I, RD, RE>(schema: Schema.Codec<A, I, RD, RE>, message: s
   Schema.decodeUnknownEffect(schema)(json).pipe(
     Effect.mapError((cause) => new OrcaClientError({ message, cause })),
   )
+
+const toRunNextTimeoutMs = (config: RepoConfigData | null) =>
+  ((config?.agentTimeoutMinutes ?? 45) + (config?.stallTimeoutMinutes ?? 10) + defaultRunNextTimeoutBufferMinutes) * 60_000
+
+const formatTimeoutDuration = (timeoutMs: number) => {
+  const totalMinutes = Math.max(1, Math.round(timeoutMs / 60_000))
+  return `${totalMinutes} minute${totalMinutes === 1 ? "" : "s"}`
+}
+
+const fetchWithTimeout = async (
+  url: string,
+  init: RequestInit,
+  timeout:
+    | {
+        readonly message: string
+        readonly timeoutMs: number
+      }
+    | undefined,
+) => {
+  if (timeout === undefined) {
+    return fetch(url, init)
+  }
+
+  const controller = new AbortController()
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeout.timeoutMs)
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } catch (cause) {
+    if (timedOut) {
+      throw new OrcaClientError({ message: timeout.message, cause })
+    }
+    throw cause
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
 
 const isFileAlreadyExistsError = (cause: unknown) => {
   if (!(cause instanceof PlatformError.PlatformError) && !hasTag(cause, "PlatformError")) {

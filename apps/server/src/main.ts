@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { rm } from "node:fs/promises"
 import { Effect, FileSystem, Layer, ManagedRuntime, Schema, Stream } from "effect"
 import { AgentRunnerLayer } from "../../cli/src/agent-runner.ts"
 import { GitHubLayer } from "../../cli/src/github.ts"
@@ -52,9 +53,14 @@ const main = async () => {
   const token = crypto.randomUUID()
   const serverReadyEvent: ServerReadyEvent = { pid: process.pid, startedAtMs, type: "server-ready" }
   let cleanedUp = false
+  let shuttingDown = false
 
   const server = Bun.serve({
-    fetch: (request) => handleRequest(request, { serverReadyEvent, token }),
+    fetch: (request) => handleRequest(request, {
+      isShuttingDown: () => shuttingDown,
+      serverReadyEvent,
+      token,
+    }),
     hostname: "127.0.0.1",
     port: 0,
   })
@@ -65,6 +71,7 @@ const main = async () => {
     startedAtMs,
     token,
   })
+  const controlFile = await runtime.runPromise(resolveOrcaDirectory().pipe(Effect.map((orcaDirectory) => `${orcaDirectory}/server.json`)))
 
   await runtime.runPromise(writeServerControl(control))
 
@@ -73,9 +80,13 @@ const main = async () => {
       return
     }
     cleanedUp = true
-    server.stop(true)
-    await runtime.runPromise(removeServerControl().pipe(Effect.orElseSucceed(() => undefined)))
-    await runtime.dispose()
+    shuttingDown = true
+    try {
+      await runtime.dispose()
+    } finally {
+      await server.stop(true)
+      await rm(controlFile, { force: true })
+    }
   }
 
   process.on("SIGINT", () => {
@@ -89,6 +100,7 @@ const main = async () => {
 const handleRequest = async (
   request: Request,
   context: {
+    readonly isShuttingDown: () => boolean
     readonly serverReadyEvent: ServerReadyEvent
     readonly token: string
   },
@@ -98,6 +110,14 @@ const handleRequest = async (
   }
 
   const url = new URL(request.url)
+
+  if (context.isShuttingDown()) {
+    if (request.method === "GET" && url.pathname === "/health") {
+      return jsonResponse({ ok: false, pid: process.pid, shuttingDown: true }, 503)
+    }
+
+    return jsonResponse(new OrcaServerErrorResponse({ message: "The local Orca server is shutting down.", tag: "ServerShuttingDown" }), 503)
+  }
 
   switch (`${request.method} ${url.pathname}`) {
     case "GET /health":
@@ -191,13 +211,6 @@ const writeServerControl = (control: OrcaServerControlData) =>
       `${orcaDirectory}/server.json`,
       JSON.stringify(Schema.encodeUnknownSync(OrcaServerControlData)(control), null, 2) + "\n",
     )
-  })
-
-const removeServerControl = () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const orcaDirectory = yield* resolveOrcaDirectory()
-    yield* fs.remove(`${orcaDirectory}/server.json`).pipe(Effect.catch(() => Effect.void))
   })
 
 const isAuthorized = (request: Request, token: string) => request.headers.get("authorization") === `Bearer ${token}`
