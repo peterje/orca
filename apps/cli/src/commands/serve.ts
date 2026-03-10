@@ -25,8 +25,6 @@ export const commandServe = Command.make(
       yield* client.pollWaitingPullRequests.pipe(Effect.orElseSucceed(() => undefined))
       const snapshot = yield* client.missionControlSnapshot
       const snapshotKey = JSON.stringify(snapshot)
-      const shouldHeartbeat = snapshot.current === null && snapshot.next === null
-
       if (snapshot.current !== null || snapshot.next !== null) {
         emptyPolls = 0
         if (snapshotKey !== previousSnapshotKey) {
@@ -48,9 +46,7 @@ export const commandServe = Command.make(
           previousSnapshotKey = null
         }
       } else {
-        if (shouldHeartbeat) {
-          emptyPolls += 1
-        }
+        emptyPolls += 1
         if (snapshotKey !== previousSnapshotKey || emptyPolls === 1 || emptyPolls % noWorkHeartbeatEvery === 0) {
           for (const line of renderMissionControl(snapshot)) {
             yield* Console.log(line)

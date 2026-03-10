@@ -49,6 +49,7 @@ const appLayer = Layer.mergeAll(
 const runtime = ManagedRuntime.make(appLayer)
 type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof runtime>
 let runtimeDisposed = false
+let startupCleanup: (() => Promise<void>) | null = null
 
 const disposeRuntimeOnce = async () => {
   if (runtimeDisposed) {
@@ -84,8 +85,6 @@ const main = async () => {
   })
   const controlFile = await runtime.runPromise(resolveOrcaDirectory().pipe(Effect.map((orcaDirectory) => `${orcaDirectory}/server.json`)))
 
-  await runtime.runPromise(writeServerControl(control))
-
   const cleanup = async () => {
     if (cleanedUp) {
       return
@@ -99,6 +98,10 @@ const main = async () => {
       await rm(controlFile, { force: true })
     }
   }
+
+  startupCleanup = cleanup
+
+  await runtime.runPromise(writeServerControl(control))
 
   process.on("SIGINT", () => {
     void cleanup().finally(() => process.exit(0))
@@ -283,6 +286,13 @@ const statusForErrorTag = (errorTag: string | undefined) => statusByErrorTag[err
 
 await main().catch(async (error) => {
   console.error(getErrorMessage(error))
-  await disposeRuntimeOnce()
-  process.exit(1)
+  try {
+    if (startupCleanup !== null) {
+      await startupCleanup()
+    } else {
+      await disposeRuntimeOnce()
+    }
+  } finally {
+    process.exit(1)
+  }
 })

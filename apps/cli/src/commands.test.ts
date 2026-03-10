@@ -256,6 +256,37 @@ describe("CLI commands", () => {
       ),
     ))
 
+  it.effect("serve emits a no-work heartbeat every tenth empty poll", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(10_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Mission control",
+        "- current: idle",
+        "- next: nothing ready right now",
+        "- issue queue: 0 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Mission control",
+        "- current: idle",
+        "- next: nothing ready right now",
+        "- issue queue: 0 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingSnapshotClientLayer(Array.from({ length: 12 }, () => snapshot({}))),
+        ),
+      ),
+    ))
+
   it.effect("serve previews review work before implementation work", () =>
     Effect.gen(function* () {
       const run = makeServeCliRunner()

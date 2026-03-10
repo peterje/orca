@@ -393,8 +393,13 @@ const decodeJson = <A, I, RD, RE>(schema: Schema.Codec<A, I, RD, RE>, message: s
 const toRunNextTimeoutMs = (config: RepoConfigData | null) =>
   ((config?.agentTimeoutMinutes ?? 45) + (config?.stallTimeoutMinutes ?? 10) + defaultRunNextTimeoutBufferMinutes) * 60_000
 
-const formatTimeoutDuration = (timeoutMs: number) => {
-  const totalMinutes = Math.max(1, Math.round(timeoutMs / 60_000))
+export const formatTimeoutDuration = (timeoutMs: number) => {
+  if (timeoutMs < 60_000) {
+    const totalSeconds = Math.max(1, Math.ceil(timeoutMs / 1000))
+    return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`
+  }
+
+  const totalMinutes = Math.round(timeoutMs / 60_000)
   return `${totalMinutes} minute${totalMinutes === 1 ? "" : "s"}`
 }
 
