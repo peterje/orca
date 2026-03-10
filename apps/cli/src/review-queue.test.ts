@@ -295,12 +295,21 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).not.toContain("Old Greptile thread")
   })
 
-  it("does not treat fresh Greptile threads without a fresh score as actionable", () => {
+  it("treats fresh Greptile thread activity without a fresh score as actionable", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
         reviewThreads: [
           {
-            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 120, isBot: true })],
+            comments: [
+              reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 80, isBot: true }),
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "The helper still needs the Greptile-approved name.",
+                createdAtMs: 120,
+                id: "review-comment-2",
+                isBot: true,
+              }),
+            ],
             isCollapsed: false,
             isResolved: false,
           },
@@ -310,7 +319,13 @@ describe("review queue", () => {
       pullRequest: pullRequest({ lastReviewedAtMs: 100 }),
     })
 
-    expect(pending).toBeNull()
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.feedbackMarkdown).toContain("The helper still needs the Greptile-approved name.")
+    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 4/5")
+    expect(pending?.latestFeedbackAtMs).toBe(120)
   })
 
   it("ignores empty review threads when building mixed feedback prompts", () => {
