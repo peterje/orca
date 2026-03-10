@@ -1,6 +1,6 @@
 ---
 agent: opencode
-agent-args: []
+agent-args:
 agent-timeout-minutes: 45
 base-branch: main
 branch-prefix: orca

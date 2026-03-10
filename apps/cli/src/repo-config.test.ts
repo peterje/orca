@@ -102,6 +102,26 @@ describe("RepoConfig", () => {
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
+  it.effect("parses flow-style yaml arrays in front matter", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: [
+            'agent-args: ["--model", "gpt-5"]',
+            'setup: ["bun install", "bun run check"]',
+            "repo: owner/name",
+          ].join("\n"),
+          prompt: "Flow arrays should parse",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const config = yield* repoConfig.read
+
+        expect(config.agentArgs).toEqual(["--model", "gpt-5"])
+        expect(config.setup).toEqual(["bun install", "bun run check"])
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
+
   it.effect("ignores unknown top-level front matter keys", () =>
     withTempCwd((tempDirectory) =>
       Effect.gen(function* () {
@@ -189,6 +209,26 @@ describe("RepoConfig", () => {
           resolve(homedir(), "orca-workspaces"),
         )
       }),
+    ))
+
+  it.effect("parses double-quoted yaml escape sequences", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: [
+            'future-setting: "hello\\nworld"',
+            'verify: ["bun run check\\n bun run test"]',
+            "repo: owner/name",
+          ].join("\n"),
+          prompt: "Escaped values should round-trip",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const workflow = yield* repoConfig.document
+
+        expect(workflow.config.raw["future-setting"]).toBe("hello\nworld")
+        expect(workflow.config.raw.verify).toEqual(["bun run check\n bun run test"])
+      }).pipe(Effect.provide(repoConfigLayer)),
     ))
 })
 

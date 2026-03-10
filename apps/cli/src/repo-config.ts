@@ -251,7 +251,6 @@ export const RepoConfigLive = Effect.gen(function* () {
   const read = refresh.pipe(Effect.map((state) => state.config))
 
   const readOption = read.pipe(
-    Effect.map((config) => config),
     Effect.matchEffect({
       onFailure: (error: RepoConfigError) =>
       error.code === "workflow-file-missing"
@@ -718,13 +717,120 @@ const parseYamlScalar = (raw: string): unknown => {
   if (/^-?\d+(\.\d+)?$/.test(raw)) {
     return Number(raw)
   }
-  if (
-    (raw.startsWith('"') && raw.endsWith('"'))
-    || (raw.startsWith("'") && raw.endsWith("'"))
-  ) {
-    return raw.slice(1, -1)
+  if (raw.startsWith('"') && raw.endsWith('"')) {
+    return parseYamlDoubleQuotedString(raw)
+  }
+  if (raw.startsWith("'") && raw.endsWith("'")) {
+    return raw.slice(1, -1).replace(/''/g, "'")
+  }
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    return parseYamlFlowArray(raw)
   }
   return raw
+}
+
+const parseYamlDoubleQuotedString = (raw: string) => {
+  try {
+    return JSON.parse(raw) as string
+  } catch (cause) {
+    throw new Error(`invalid double-quoted yaml string: ${String(cause)}`)
+  }
+}
+
+const parseYamlFlowArray = (raw: string): Array<unknown> => {
+  const inner = raw.slice(1, -1).trim()
+  if (inner.length === 0) {
+    return []
+  }
+
+  return splitYamlFlowSequenceEntries(inner).map((entry) => parseYamlScalar(entry))
+}
+
+const splitYamlFlowSequenceEntries = (raw: string): Array<string> => {
+  const entries: Array<string> = []
+  let current = ""
+  let depth = 0
+  let inDoubleQuotes = false
+  let inSingleQuotes = false
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index]!
+
+    if (inDoubleQuotes) {
+      current += character
+      if (character === "\\") {
+        index += 1
+        if (index >= raw.length) {
+          throw new Error("unterminated escape sequence in yaml flow array")
+        }
+        current += raw[index]
+        continue
+      }
+      if (character === '"') {
+        inDoubleQuotes = false
+      }
+      continue
+    }
+
+    if (inSingleQuotes) {
+      current += character
+      if (character === "'") {
+        if (raw[index + 1] === "'") {
+          current += raw[index + 1]
+          index += 1
+          continue
+        }
+        inSingleQuotes = false
+      }
+      continue
+    }
+
+    if (character === '"') {
+      inDoubleQuotes = true
+      current += character
+      continue
+    }
+    if (character === "'") {
+      inSingleQuotes = true
+      current += character
+      continue
+    }
+    if (character === "[" || character === "{") {
+      depth += 1
+      current += character
+      continue
+    }
+    if (character === "]" || character === "}") {
+      if (depth === 0) {
+        throw new Error("unexpected closing token in yaml flow array")
+      }
+      depth -= 1
+      current += character
+      continue
+    }
+    if (character === "," && depth === 0) {
+      const entry = current.trim()
+      if (entry.length === 0) {
+        throw new Error("yaml flow arrays must not contain empty entries")
+      }
+      entries.push(entry)
+      current = ""
+      continue
+    }
+
+    current += character
+  }
+
+  if (inDoubleQuotes || inSingleQuotes || depth !== 0) {
+    throw new Error("unterminated yaml flow array")
+  }
+
+  const finalEntry = current.trim()
+  if (finalEntry.length === 0) {
+    throw new Error("yaml flow arrays must not end with an empty entry")
+  }
+  entries.push(finalEntry)
+  return entries
 }
 
 const stringifyYaml = (value: unknown, indent = 0): string => {
