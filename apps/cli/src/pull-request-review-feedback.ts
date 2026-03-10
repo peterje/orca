@@ -95,7 +95,6 @@ export const buildPullRequestReviewPromptInput = (options: {
     : null
 
   const freshHumanThreadTimestampsMs = getFreshThreadTimestampsMs(humanThreads, options.humanSince, "human")
-  const freshGreptileThreadTimestampsMs = getFreshThreadTimestampsMs(greptileThreads, options.greptileSince)
 
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0

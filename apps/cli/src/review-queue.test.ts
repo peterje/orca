@@ -295,6 +295,24 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).not.toContain("Old Greptile thread")
   })
 
+  it("does not treat fresh Greptile threads without a fresh score as actionable", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 120, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 80, isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 100 }),
+    })
+
+    expect(pending).toBeNull()
+  })
+
   it("ignores empty review threads when building mixed feedback prompts", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
