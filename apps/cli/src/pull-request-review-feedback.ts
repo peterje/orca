@@ -23,6 +23,8 @@ export type PullRequestReviewPromptInput = {
   readonly reviewScore: PendingGreptileReviewScore | null
 }
 
+type NonEmptyReadonlyArray<A> = readonly [A, ...Array<A>]
+
 type ReviewFeedbackSource = "greptile" | "human"
 
 type ReviewFeedbackComment = PullRequestComment & {
@@ -38,7 +40,7 @@ type ReviewFeedbackReviewComment = PullRequestReviewComment & {
 }
 
 type ReviewFeedbackThread = {
-  readonly comments: ReadonlyArray<ReviewFeedbackReviewComment>
+  readonly comments: NonEmptyReadonlyArray<ReviewFeedbackReviewComment>
   readonly latestGreptileActivityAtMs: number | null
   readonly latestHumanActivityAtMs: number | null
   readonly latestActivityAtMs: number
@@ -95,10 +97,11 @@ export const buildPullRequestReviewPromptInput = (options: {
     .sort(compareEntries)
 
   const latestGreptileScoreEntry = findLatestGreptileScoreEntry(options.feedback)
-  const latestGreptileScoreEntryAtMs = latestGreptileScoreEntry === null ? 0 : getEntryActivityAtMs(latestGreptileScoreEntry)
-  const freshGreptileScoreEntry = latestGreptileScoreEntryAtMs > options.greptileSince
+  const latestGreptileScoreEntryAtMs = latestGreptileScoreEntry === null ? null : getEntryActivityAtMs(latestGreptileScoreEntry)
+  const freshGreptileScoreEntry = latestGreptileScoreEntryAtMs !== null && latestGreptileScoreEntryAtMs > options.greptileSince
     ? latestGreptileScoreEntry
     : null
+  const freshGreptileScoreEntryAtMs = freshGreptileScoreEntry === null ? null : getEntryActivityAtMs(freshGreptileScoreEntry)
   const freshGreptileReviewScore = freshGreptileScoreEntry === null
     ? null
     : parsePendingGreptileReviewScore(freshGreptileScoreEntry.body)
@@ -106,8 +109,7 @@ export const buildPullRequestReviewPromptInput = (options: {
     ? freshGreptileReviewScore
     : null
 
-  const freshHumanThreads = filterFreshThreads(humanThreads, options.humanSince, "human")
-  const freshHumanThreadTimestampsMs = getFreshThreadTimestampsMs(freshHumanThreads, options.humanSince, "human")
+  const freshHumanThreadTimestampsMs = getFreshThreadTimestampsMs(humanThreads, options.humanSince, "human")
 
   const freshGreptileThreads = filterFreshThreads(greptileThreads, options.greptileSince)
   const freshGreptileThreadTimestampsMs = getFreshThreadTimestampsMs(freshGreptileThreads, options.greptileSince)
@@ -122,8 +124,10 @@ export const buildPullRequestReviewPromptInput = (options: {
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0
     || freshHumanThreadTimestampsMs.length > 0
+  // A missing score entry means there is no Greptile score baseline yet, so any
+  // unresolved Greptile thread newer than the cursor still counts as fresh work.
   const hasFreshGreptileThreadFeedback = latestFreshGreptileThreadAtMs !== null
-    && latestFreshGreptileThreadAtMs > latestGreptileScoreEntryAtMs
+    && (latestGreptileScoreEntryAtMs === null || latestFreshGreptileThreadAtMs > latestGreptileScoreEntryAtMs)
   // Fresh standalone Greptile summaries stay suppressed unless there is still an
   // active score or a newer unresolved Greptile thread to act on.
   const hasFreshGreptileFeedback = activeGreptileScore !== null
@@ -158,7 +162,7 @@ export const buildPullRequestReviewPromptInput = (options: {
     ...promptGreptileComments.map(getEntryActivityAtMs),
     ...promptGreptileReviews.map(getEntryActivityAtMs),
     ...freshPromptGreptileThreadTimestampsMs,
-    ...(hasFreshGreptileFeedback && freshGreptileScoreEntry !== null ? [latestGreptileScoreEntryAtMs] : []),
+    ...(hasFreshGreptileFeedback && freshGreptileScoreEntryAtMs !== null ? [freshGreptileScoreEntryAtMs] : []),
   ]
   const latestFeedbackAtMs = findLatestNumber(latestFeedbackTimestampCandidates)
 
@@ -232,16 +236,22 @@ const classifyReviewComment = (comment: PullRequestReviewComment): ReviewFeedbac
 
 const classifyReviewThread = (thread: PullRequestReviewThread): ReviewFeedbackThread | null => {
   const comments = thread.comments.map(classifyReviewComment)
-  const latestActivityAtMs = findLatestEntryActivityAtMs(comments)
+
+  if (comments[0] === undefined) {
+    return null
+  }
+
+  const nonEmptyComments: NonEmptyReadonlyArray<ReviewFeedbackReviewComment> = [comments[0], ...comments.slice(1)]
+  const latestActivityAtMs = findLatestEntryActivityAtMs(nonEmptyComments)
 
   if (latestActivityAtMs === null) {
     return null
   }
 
   return {
-    comments,
-    latestGreptileActivityAtMs: findLatestEntryActivityAtMs(comments.filter((comment) => comment.source === "greptile")),
-    latestHumanActivityAtMs: findLatestEntryActivityAtMs(comments.filter((comment) => comment.source === "human")),
+    comments: nonEmptyComments,
+    latestGreptileActivityAtMs: findLatestEntryActivityAtMs(nonEmptyComments.filter((comment) => comment.source === "greptile")),
+    latestHumanActivityAtMs: findLatestEntryActivityAtMs(nonEmptyComments.filter((comment) => comment.source === "human")),
     latestActivityAtMs,
   }
 }
@@ -481,10 +491,10 @@ const renderReviewThread = (promptThread: PromptReviewThread) => {
 
 const getPrimaryThreadComment = (thread: ReviewFeedbackThread, priority: ReviewFeedbackSource) => {
   if (priority === "greptile") {
-    return thread.comments[0]!
+    return thread.comments[0]
   }
 
-  return findLatestEntry(thread.comments.filter((comment) => comment.source === "human")) ?? thread.comments[0]!
+  return findLatestEntry(thread.comments.filter((comment) => comment.source === "human")) ?? thread.comments[0]
 }
 
 const renderReviewComment = (

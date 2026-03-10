@@ -397,6 +397,27 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(120)
   })
 
+  it("treats unresolved Greptile threads as fresh when no score baseline exists yet", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 80, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest(),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.latestFeedbackAtMs).toBe(80)
+  })
+
   it("omits stale Greptile threads when only a new failing score is fresh", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
