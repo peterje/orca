@@ -22,7 +22,10 @@ export const commandServe = Command.make(
     let emptyPolls = 0
 
     while (true) {
-      yield* client.pollWaitingPullRequests.pipe(Effect.orElseSucceed(() => undefined))
+      yield* client.pollWaitingPullRequests.pipe(
+        Effect.tapError((error) => Console.log(`Failed to poll waiting pull requests: ${formatErrorMessage(error)}`)),
+        Effect.orElseSucceed(() => undefined),
+      )
       const snapshot = yield* client.missionControlSnapshot
       const snapshotKey = JSON.stringify(snapshot)
       if (snapshot.current !== null || snapshot.next !== null) {
@@ -36,10 +39,7 @@ export const commandServe = Command.make(
         if (execute && snapshot.current === null && snapshot.next !== null) {
           const result = yield* client.runNext.pipe(Effect.result)
           yield* Result.match(result, {
-            onFailure: (error) => {
-              const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)
-              return Console.log(`Run failed: ${message}`)
-            },
+            onFailure: (error) => Console.log(`Run failed: ${formatErrorMessage(error)}`),
             onSuccess: (value) =>
               Console.log(`${value.mode === "review" ? "Updated" : "Opened"} PR for ${value.issueIdentifier}: ${value.pullRequestUrl}`),
           })
@@ -59,3 +59,6 @@ export const commandServe = Command.make(
     }
   }),
 ).pipe(Command.withDescription("Poll Linear and print the next Orca issue."))
+
+const formatErrorMessage = (error: unknown) =>
+  typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)

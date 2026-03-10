@@ -336,16 +336,19 @@ describe("CLI commands", () => {
       yield* Fiber.interrupt(fiber)
 
       expect(yield* TestConsole.logLines).toEqual([
+        "Failed to poll waiting pull requests: boom",
         "Mission control",
         "- current: idle",
         "- next: ENG-1 First issue - ready to pick up",
         "- issue queue: 1 ready to pick up, 0 blocked",
         "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Failed to poll waiting pull requests: boom",
         "Mission control",
         "- current: idle",
         "- next: ENG-2 Second issue - ready to pick up",
         "- issue queue: 1 ready to pick up, 0 blocked",
         "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Failed to poll waiting pull requests: boom",
       ])
     }).pipe(
       Effect.provide(
@@ -354,9 +357,9 @@ describe("CLI commands", () => {
           TestConsole.layer,
           sequencingSnapshotClientLayer(
             [
-            snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
-            snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
-            snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+              snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+              snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+              snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
             ],
             { pollWaitingPullRequests: Effect.fail(new RunnerFailure({ message: "boom" })) },
           ),

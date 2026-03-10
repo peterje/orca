@@ -64,6 +64,8 @@ const main = async () => {
   const startedAtMs = Date.now()
   const token = crypto.randomUUID()
   const serverReadyEvent: ServerReadyEvent = { pid: process.pid, startedAtMs, type: "server-ready" }
+  const orcaDirectory = await runtime.runPromise(resolveOrcaDirectory())
+  const controlFile = `${orcaDirectory}/server.json`
   let cleanedUp = false
   let pollingWaitingPullRequests = false
   let runningNext = false
@@ -101,8 +103,6 @@ const main = async () => {
     port: 0,
   })
 
-  let controlFile: string | null = null
-
   const cleanup = async () => {
     if (cleanedUp) {
       return
@@ -112,9 +112,7 @@ const main = async () => {
     shuttingDown = true
 
     try {
-      if (controlFile !== null) {
-        await rm(controlFile, { force: true })
-      }
+      await rm(controlFile, { force: true })
     } finally {
       try {
         await disposeRuntimeOnce()
@@ -139,9 +137,9 @@ const main = async () => {
     startedAtMs,
     token,
   })
-  const orcaDirectory = await runtime.runPromise(resolveOrcaDirectory())
-  controlFile = `${orcaDirectory}/server.json`
 
+  // Bind first so the control file advertises the final ephemeral port, then publish
+  // server.json so clients only discover a fully initialized local server.
   await runtime.runPromise(writeServerControl(control, orcaDirectory))
 }
 
