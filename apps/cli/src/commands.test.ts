@@ -397,9 +397,10 @@ const cliEnvironmentLayer = Layer.mergeAll(
     RepoConfig.of({
       bootstrap: () => Effect.die("not used in this test"),
       configPath: Effect.die("not used in this test"),
+      document: Effect.die("not used in this test"),
       exists: Effect.die("not used in this test"),
-      read: Effect.die("not used in this test"),
-      readOption: Effect.succeed(null),
+      read: Effect.succeed(makeRepoConfigData({})),
+      readOption: Effect.succeed(makeRepoConfigData({})),
       write: () => Effect.die("not used in this test"),
     }),
   ),
@@ -448,6 +449,7 @@ const fixedRepoConfigLayer = (config: { readonly linearLabel?: string | undefine
     RepoConfig.of({
       bootstrap: () => Effect.die("not used in this test"),
       configPath: Effect.die("not used in this test"),
+      document: Effect.die("not used in this test"),
       exists: Effect.die("not used in this test"),
       read: Effect.succeed(makeRepoConfigData(config)),
       readOption: Effect.succeed(makeRepoConfigData(config)),
@@ -534,8 +536,8 @@ const filterIssuesByWorkspace = (issues: ReadonlyArray<TestLinearIssue>, workspa
     : issues.filter((issue) => issue.workspaceSlug?.toLowerCase() === normalizedWorkspaceSlug)
 }
 
-const makeRepoConfigData = (overrides: { readonly linearLabel?: string | undefined; readonly linearWorkspace?: string | undefined }) =>
-  new RepoConfigData({
+function makeRepoConfigData(overrides: { readonly linearLabel?: string | undefined; readonly linearWorkspace?: string | undefined }) {
+  return new RepoConfigData({
     agent: "opencode",
     agentArgs: [],
     agentTimeoutMinutes: 45,
@@ -552,3 +554,4 @@ const makeRepoConfigData = (overrides: { readonly linearLabel?: string | undefin
     stallTimeoutMinutes: 10,
     verify: ["bun run check"],
   })
+}

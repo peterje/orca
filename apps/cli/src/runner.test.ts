@@ -1525,6 +1525,7 @@ const makeRunnerLayer = (options: {
           RepoConfig.of({
             bootstrap: () => Effect.die("not used in this test"),
             configPath: Effect.die("not used in this test"),
+            document: Effect.die("not used in this test"),
             exists: Effect.die("not used in this test"),
             read: Effect.succeed(new RepoConfigData({
               agent: "opencode",
