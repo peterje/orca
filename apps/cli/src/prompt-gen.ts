@@ -143,7 +143,7 @@ ${repoInstructions}
 
 - Work only in the current worktree on branch \`${options.branch}\`.
 - Base branch is \`${options.baseBranch}\`.
-- Address the requested human and Greptile feedback together, and follow the human direction first when they disagree.
+- Address the requested pull request feedback. When both human and Greptile feedback are present, follow the human direction first when they disagree.
 - Do not ask for permission; pick reasonable defaults and keep going.
 - Do not mutate unrelated git state.
 - Do not commit secrets or any files under \`.orca/\`.

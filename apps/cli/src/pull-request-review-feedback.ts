@@ -100,12 +100,7 @@ export const buildPullRequestReviewPromptInput = (options: {
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0
     || freshHumanThreadTimestampsMs.length > 0
-  const hasFreshGreptileFeedback = activeGreptileScore !== null && (
-    latestGreptileScoreEntryAtMs > options.greptileSince
-    || greptileComments.length > 0
-    || greptileReviews.length > 0
-    || freshGreptileThreadTimestampsMs.length > 0
-  )
+  const hasFreshGreptileFeedback = activeGreptileScore !== null
   const promptGreptileComments = hasFreshGreptileFeedback
     ? includeLatestGreptileScoreComment(greptileComments, freshGreptileScoreEntry, activeGreptileScore)
     : []
