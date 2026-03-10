@@ -148,6 +148,8 @@ export type WorkflowDocument = {
   readonly config: WorkflowFrontMatter
   readonly path: string
   readonly prompt: string
+  // Preserve the repo-owned body for rewrites; this stays equal to `prompt`
+  // until strict workflow template rendering lands.
   readonly promptTemplate: string
 }
 
@@ -395,12 +397,13 @@ const parseWorkflowDocument = (path: string, raw: string) =>
   Effect.gen(function* () {
     const split = splitWorkflowDocument(raw)
     const rawConfig = yield* decodeWorkflowFrontMatter(path, split.frontMatter)
+    const promptTemplate = split.prompt
 
     return {
       config: new WorkflowFrontMatter(rawConfig),
       path,
-      prompt: split.prompt,
-      promptTemplate: split.prompt,
+      prompt: promptTemplate,
+      promptTemplate,
     } satisfies WorkflowDocument
   })
 
@@ -826,10 +829,9 @@ const splitYamlFlowSequenceEntries = (raw: string): Array<string> => {
   }
 
   const finalEntry = current.trim()
-  if (finalEntry.length === 0) {
-    throw new Error("yaml flow arrays must not end with an empty entry")
+  if (finalEntry.length > 0) {
+    entries.push(finalEntry)
   }
-  entries.push(finalEntry)
   return entries
 }
 
@@ -847,6 +849,9 @@ const stringifyYaml = (value: unknown, indent = 0): string => {
 
 const stringifyYamlObjectEntry = (key: string, value: unknown, indent: number) => {
   const prefix = `${" ".repeat(indent)}${key}:`
+  if (Array.isArray(value) && value.length === 0) {
+    return prefix
+  }
   if (isYamlComplexValue(value)) {
     return `${prefix}\n${stringifyYaml(value, indent + 2)}`
   }

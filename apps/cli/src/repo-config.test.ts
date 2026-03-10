@@ -49,13 +49,15 @@ describe("RepoConfig", () => {
           repo: "peterje/orca",
         })
         const workflow = yield* repoConfig.document
+        const workflowContent = readFileSync(join(tempDirectory, defaultWorkflowFileName), "utf8")
 
         expect(config.greptilePollIntervalSeconds).toBe(defaultGreptilePollIntervalSeconds)
         expect(config.linearWorkspace).toBe("peteredm")
         expect(config.maxWaitingPullRequests).toBe(defaultMaxWaitingPullRequests)
         expect(workflow.path).toBe(realpathSync(join(tempDirectory, defaultWorkflowFileName)))
         expect(workflow.prompt).toContain("You are working on the current Orca issue")
-        expect(readFileSync(join(tempDirectory, defaultWorkflowFileName), "utf8")).toContain("linear-workspace: peteredm")
+        expect(workflowContent).toContain("linear-workspace: peteredm")
+        expect(workflowContent).toContain("agent-args:\nagent-timeout-minutes: 45")
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
@@ -96,6 +98,7 @@ describe("RepoConfig", () => {
         const workflow = yield* repoConfig.document
         const config = yield* repoConfig.read
 
+        expect(workflow.promptTemplate).toBe("Prompt only")
         expect(workflow.prompt).toBe("Prompt only")
         expect(config.linearLabel).toBe("Orca")
         expect(config.repo).toBe("owner/name")
@@ -107,8 +110,8 @@ describe("RepoConfig", () => {
       Effect.gen(function* () {
         writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
           frontMatter: [
-            'agent-args: ["--model", "gpt-5"]',
-            'setup: ["bun install", "bun run check"]',
+            'agent-args: ["--model", "gpt-5",]',
+            'setup: ["bun install", "bun run check",]',
             "repo: owner/name",
           ].join("\n"),
           prompt: "Flow arrays should parse",
