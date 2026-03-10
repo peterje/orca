@@ -1244,6 +1244,7 @@ describe("Runner", () => {
 
         expect(publishedEvents).toEqual([
           {
+            initialStage: "implementing",
             issueIdentifier: "ENG-1",
             issueTitle: "Example issue",
             mode: "implementation",
@@ -1297,6 +1298,7 @@ describe("Runner", () => {
 
         expect(publishedEvents).toEqual([
           {
+            initialStage: "implementing",
             issueIdentifier: "ENG-1",
             issueTitle: "Example issue",
             mode: "implementation",
@@ -1350,6 +1352,7 @@ describe("Runner", () => {
 
         expect(publishedEvents).toEqual([
           {
+            initialStage: "implementing",
             issueIdentifier: "ENG-1",
             issueTitle: "Example issue",
             mode: "implementation",
@@ -1567,6 +1570,36 @@ describe("Runner", () => {
       })),
     )
   })
+
+  it.effect("publishes run-completed with worktreeRemoved after successful cleanup", () => {
+    const publishedEvents: Array<OrcaServerEvent> = []
+    const removedWorktrees: Array<string> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const result = yield* runner.runNext
+
+        expect(result).toMatchObject({
+          issueIdentifier: "ENG-1",
+          mode: "implementation",
+          pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+          worktreePath: join(tempDirectory, "worktree"),
+        })
+        expect(removedWorktrees).toEqual([join(tempDirectory, "worktree")])
+        expect(publishedEvents).toContainEqual({
+          result,
+          type: "run-completed",
+          worktreeRemoved: true,
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        config: { cleanupWorktreeOnSuccess: true },
+        publishedEvents,
+        removedWorktrees,
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
 })
 
 const makeRunnerLayer = (options: {
@@ -1612,6 +1645,7 @@ const makeRunnerLayer = (options: {
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
   readonly publishedEvents?: Array<OrcaServerEvent>
   readonly removedPullRequests?: Array<string>
+  readonly removedWorktrees?: Array<string>
   readonly readPullRequestFeedbackRequests?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
   readonly readyForReviewRequests?: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }>
   readonly recordedGreptileReviewRequests?: Array<{
@@ -1659,9 +1693,13 @@ const makeRunnerLayer = (options: {
   readonly worktreeDirectory: string
   readonly worktreeStatus?: string
 }) => {
+  const removedWorktrees = options.removedWorktrees ?? []
   const worktree = makeManagedWorktree({
     baseSyncMergeExitCode: options.baseSyncMergeExitCode,
     directory: options.worktreeDirectory,
+    onRemove: (directory) => {
+      removedWorktrees.push(directory)
+    },
     unresolvedConflictFiles: options.unresolvedConflictFiles,
     unresolvedConflictFilesAfterFirstRead: options.unresolvedConflictFilesAfterFirstRead,
     weaveDriver: options.weaveDriver,
@@ -2028,6 +2066,7 @@ const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][
 const makeManagedWorktree = (options: {
   readonly baseSyncMergeExitCode?: number | undefined
   readonly directory: string
+  readonly onRemove?: ((directory: string) => void) | undefined
   readonly unresolvedConflictFiles?: ReadonlyArray<string> | undefined
   readonly unresolvedConflictFilesAfterFirstRead?: ReadonlyArray<string> | undefined
   readonly weaveDriver?: string | null | undefined
@@ -2040,7 +2079,9 @@ const makeManagedWorktree = (options: {
   return {
     branch: "orca/eng-1-example-issue",
     directory: options.directory,
-    remove: Effect.void,
+    remove: Effect.sync(() => {
+      options.onRemove?.(options.directory)
+    }),
     run: (command) =>
       Effect.sync(() => {
         options.worktreeCommandLog?.push(command)

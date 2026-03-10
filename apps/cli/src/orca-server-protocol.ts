@@ -30,6 +30,7 @@ export const OrcaServerEventData = Schema.Union([
     type: Schema.Literal("server-ready"),
   }),
   Schema.Struct({
+    initialStage: ActiveRunStageSchema,
     issueIdentifier: Schema.String,
     issueTitle: Schema.String,
     mode: ActiveRunModeSchema,
@@ -44,6 +45,7 @@ export const OrcaServerEventData = Schema.Union([
   Schema.Struct({
     result: RunnerResultData,
     type: Schema.Literal("run-completed"),
+    worktreeRemoved: Schema.Boolean,
   }),
   Schema.Struct({
     issueIdentifier: Schema.String,

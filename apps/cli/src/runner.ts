@@ -7,7 +7,7 @@ import { PromptGen, PromptGenError } from "./prompt-gen.ts"
 import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
 import { findLatestGreptileReviewScore, type PendingPullRequestReview } from "./review-queue.ts"
-import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
+import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunMode, type ActiveRunStage } from "./run-state.ts"
 import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
 import { Worktree, WorktreeError, makeRemoteBaseRef, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
@@ -340,11 +340,11 @@ const runImplementation = (options: {
     )
 
     return yield* Effect.gen(function* () {
-      yield* publishOrcaEvent({
+      yield* publishRunStarted({
+        initialStage: "implementing",
         issueIdentifier: options.issue.identifier,
         issueTitle: options.issue.title,
         mode: "implementation",
-        type: "run-started",
       })
 
       yield* announceRunStage({
@@ -444,8 +444,10 @@ const runImplementation = (options: {
         issueId: options.issue.id,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      let worktreeRemoved = false
       if (options.config.cleanupWorktreeOnSuccess) {
         yield* managedWorktree.remove.pipe(Effect.mapError(toRunnerFailure))
+        worktreeRemoved = true
       }
 
       const result = {
@@ -455,7 +457,7 @@ const runImplementation = (options: {
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
 
-      yield* publishOrcaEvent({ result, type: "run-completed" })
+      yield* publishRunCompleted({ result, worktreeRemoved })
 
       return result
     }).pipe(
@@ -506,11 +508,11 @@ const runMaintenance = (options: {
     )
 
     return yield* Effect.gen(function* () {
-      yield* publishOrcaEvent({
+      yield* publishRunStarted({
+        initialStage: "syncing-with-base",
         issueIdentifier: options.pullRequest.issueIdentifier,
         issueTitle: options.pullRequest.issueTitle,
         mode: "maintenance",
-        type: "run-started",
       })
 
       yield* announceRunStage({
@@ -628,8 +630,10 @@ const runMaintenance = (options: {
         issueId: options.pullRequest.issueId,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      let worktreeRemoved = false
       if (options.config.cleanupWorktreeOnSuccess) {
         yield* managedWorktree.remove.pipe(Effect.mapError(toRunnerFailure))
+        worktreeRemoved = true
       }
 
       const result = {
@@ -639,7 +643,7 @@ const runMaintenance = (options: {
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
 
-      yield* publishOrcaEvent({ result, type: "run-completed" })
+      yield* publishRunCompleted({ result, worktreeRemoved })
 
       return result
     }).pipe(
@@ -687,11 +691,11 @@ const runReview = (options: {
     )
 
     return yield* Effect.gen(function* () {
-      yield* publishOrcaEvent({
+      yield* publishRunStarted({
+        initialStage: "addressing-review-feedback",
         issueIdentifier: options.review.pullRequest.issueIdentifier,
         issueTitle: options.review.pullRequest.issueTitle,
         mode: "review",
-        type: "run-started",
       })
 
       yield* announceRunStage({
@@ -787,8 +791,10 @@ const runReview = (options: {
         issueId: options.review.pullRequest.issueId,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      let worktreeRemoved = false
       if (options.config.cleanupWorktreeOnSuccess) {
         yield* managedWorktree.remove.pipe(Effect.mapError(toRunnerFailure))
+        worktreeRemoved = true
       }
 
       const result = {
@@ -798,7 +804,7 @@ const runReview = (options: {
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
 
-      yield* publishOrcaEvent({ result, type: "run-completed" })
+      yield* publishRunCompleted({ result, worktreeRemoved })
 
       return result
     }).pipe(
@@ -843,6 +849,30 @@ const announceRunStage = (options: {
       type: "run-stage-changed",
     }),
   ]).pipe(Effect.asVoid)
+
+const publishRunStarted = (options: {
+  readonly initialStage: ActiveRunStage
+  readonly issueIdentifier: string
+  readonly issueTitle: string
+  readonly mode: ActiveRunMode
+}) =>
+  publishOrcaEvent({
+    initialStage: options.initialStage,
+    issueIdentifier: options.issueIdentifier,
+    issueTitle: options.issueTitle,
+    mode: options.mode,
+    type: "run-started",
+  })
+
+const publishRunCompleted = (options: {
+  readonly result: RunnerResult
+  readonly worktreeRemoved: boolean
+}) =>
+  publishOrcaEvent({
+    result: options.result,
+    type: "run-completed",
+    worktreeRemoved: options.worktreeRemoved,
+  })
 
 const syncTrackedPullRequestWithBase = (options: {
   readonly baseBranch: string
@@ -982,7 +1012,7 @@ const reportFailure = (options: {
   }
 }) =>
   Effect.gen(function* () {
-    if (options.error instanceof RepoConfigError || options.error instanceof RunStateBusyError || options.error instanceof RunnerNoWorkError) {
+    if (isNonReportableFailure(options.error)) {
       return
     }
 
@@ -1068,6 +1098,9 @@ export const reportFailureCause = (options: {
 
   return Effect.void
 }
+
+const isNonReportableFailure = (error: RunnerFailure | RepoConfigError | RunStateBusyError | RunnerNoWorkError) =>
+  error._tag === "RepoConfigError" || error._tag === "RunStateBusyError" || error._tag === "RunnerNoWorkError"
 
 const formatFailureMessages = (messages: ReadonlyArray<string>) => {
   const uniqueMessages = Array.from(new Set(messages.map((message) => message.trim()).filter((message) => message.length > 0)))
