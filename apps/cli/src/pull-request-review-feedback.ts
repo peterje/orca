@@ -89,19 +89,11 @@ export const buildPullRequestReviewPromptInput = (options: {
     : parsePendingGreptileReviewScore(latestGreptileScoreEntry.body)
   const activeGreptileScore = reviewScore !== null && reviewScore.value < reviewScore.maximum ? reviewScore : null
 
-  const promptGreptileComments = activeGreptileScore === null
-    ? []
-    : includeLatestGreptileScoreComment(greptileComments, latestGreptileScoreEntry, activeGreptileScore)
-  const promptGreptileReviews = activeGreptileScore === null
-    ? []
-    : includeLatestGreptileScoreReview(greptileReviews, latestGreptileScoreEntry, activeGreptileScore)
-  const promptGreptileThreads = activeGreptileScore === null ? [] : greptileThreads
   const freshHumanThreadFeedbackAtMs = getFreshThreadActivityAtMs(humanThreads, options.humanSince, "human")
   const freshGreptileThreadFeedbackAtMs = getFreshThreadActivityAtMs(unresolvedThreads, options.greptileSince, "greptile")
   // Once a human thread is in scope, any fresh reply on that thread should advance the
   // review watermark so we do not re-queue the same mixed thread on the next poll.
   const freshHumanThreadWatermarkAtMs = getFreshThreadActivityAtMs(humanThreads, options.humanSince)
-  const freshPromptGreptileThreadActivityAtMs = getFreshThreadActivityAtMs(promptGreptileThreads, options.greptileSince)
 
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0
@@ -112,6 +104,15 @@ export const buildPullRequestReviewPromptInput = (options: {
     || greptileReviews.length > 0
     || freshGreptileThreadFeedbackAtMs.length > 0
   )
+  const promptGreptileComments = hasFreshGreptileFeedback
+    ? includeLatestGreptileScoreComment(greptileComments, latestGreptileScoreEntry, activeGreptileScore)
+    : []
+  const promptGreptileReviews = hasFreshGreptileFeedback
+    ? includeLatestGreptileScoreReview(greptileReviews, latestGreptileScoreEntry, activeGreptileScore)
+    : []
+  const promptGreptileThreads = hasFreshGreptileFeedback ? greptileThreads : []
+  const activeGreptileScoreForPrompt = hasFreshGreptileFeedback ? activeGreptileScore : null
+  const freshPromptGreptileThreadActivityAtMs = getFreshThreadActivityAtMs(promptGreptileThreads, options.greptileSince)
 
   if (!hasFreshHumanFeedback && !hasFreshGreptileFeedback) {
     return null
@@ -127,7 +128,7 @@ export const buildPullRequestReviewPromptInput = (options: {
   ])
 
   if (latestFeedbackAtMs === null) {
-    return null
+    throw new Error("Expected fresh pull request review feedback.")
   }
 
   return {
@@ -138,10 +139,10 @@ export const buildPullRequestReviewPromptInput = (options: {
       humanComments,
       humanReviews,
       humanThreads,
-      reviewScore: activeGreptileScore,
+      reviewScore: activeGreptileScoreForPrompt,
     }),
     latestFeedbackAtMs,
-    reviewScore: activeGreptileScore,
+    reviewScore: activeGreptileScoreForPrompt,
   }
 }
 

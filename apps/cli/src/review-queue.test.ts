@@ -152,6 +152,25 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(90)
   })
 
+  it("omits stale Greptile scores when only human feedback is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please keep the reviewer-approved wording.", createdAtMs: 70 })],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 50, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 55, waitingForGreptileReviewSinceMs: 60 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("Please keep the reviewer-approved wording.")
+    expect(pending?.feedbackMarkdown).not.toContain("If human and Greptile feedback conflict")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 3/5")
+    expect(pending?.latestFeedbackAtMs).toBe(70)
+  })
+
   it("tracks fresh Greptile replies on mixed human threads", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
