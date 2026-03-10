@@ -67,6 +67,7 @@ export type GitHubService = {
     readonly repo: string
   }) => Effect.Effect<PullRequestFeedback, GitHubError>
   markPullRequestReadyForReview: (options: {
+    readonly isDraft: boolean
     readonly pullRequestNumber: number
     readonly repo: string
   }) => Effect.Effect<void, GitHubError>
@@ -283,30 +284,37 @@ export const GitHubLive = Effect.gen(function* () {
     )
 
   const markPullRequestReadyForReview = (options: {
+    readonly isDraft: boolean
     readonly pullRequestNumber: number
     readonly repo: string
   }) =>
-    ChildProcess.make(
-      "gh",
-      ["pr", "ready", String(options.pullRequestNumber), "--repo", options.repo],
-      {
-        stderr: "pipe",
-        stdout: "pipe",
-      },
-    ).pipe(
-      spawner.exitCode,
-      Effect.flatMap((exitCode) =>
-        exitCode === 0
-          ? Effect.void
-          : Effect.fail(new GitHubError({ message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.` }))),
-      Effect.mapError((cause) =>
-        cause instanceof GitHubError
-          ? cause
-          : new GitHubError({
-              message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.`,
-              cause,
-            })),
-    )
+    Effect.gen(function* () {
+      if (!options.isDraft) {
+        return
+      }
+
+      const exitCode = yield* ChildProcess.make(
+        "gh",
+        ["pr", "ready", String(options.pullRequestNumber), "--repo", options.repo],
+        {
+          stderr: "pipe",
+          stdout: "pipe",
+        },
+      ).pipe(
+        spawner.exitCode,
+        Effect.mapError((cause) =>
+          cause instanceof GitHubError
+            ? cause
+            : new GitHubError({
+                message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.`,
+                cause,
+              })),
+      )
+
+      if (exitCode !== 0) {
+        return yield* Effect.fail(new GitHubError({ message: `Failed to mark pull request #${options.pullRequestNumber} ready for review.` }))
+      }
+    })
 
   return GitHub.of({
     createPullRequest,

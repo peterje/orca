@@ -139,17 +139,33 @@ export const RunnerLive = Effect.gen(function* () {
     const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
 
     yield* Effect.forEach(
+      // pollWaitingPullRequests only inspects PRs still waiting on Greptile. Terminal PRs are
+      // pruned by loadTrackedPullRequestQueue during selection so 5/5 successes stay out of the
+      // loop after restart without re-reading already-finished PR feedback on every poll.
       storedPullRequests.filter(isWaitingForGreptileReview),
       (pullRequest) =>
         Effect.gen(function* () {
-          const waitingSince = pullRequest.waitingForGreptileReviewSinceMs
           const feedback = yield* github.readPullRequestFeedback({
             pullRequestNumber: pullRequest.prNumber,
             repo: pullRequest.repo,
           }).pipe(Effect.mapError(toRunnerFailure))
           if (feedback.state.toUpperCase() !== "OPEN") {
+            yield* linear.commentOnIssue({
+              body: [
+                `Orca stopped tracking the pull request for ${pullRequest.issueIdentifier} because it was ${feedback.state.toLowerCase()} outside Orca.`,
+                "",
+                `- PR: ${pullRequest.prUrl}`,
+              ].join("\n"),
+              issueId: pullRequest.issueId,
+            }).pipe(Effect.mapError(toRunnerFailure))
+            yield* pullRequestStore.remove({
+              prNumber: pullRequest.prNumber,
+              repo: pullRequest.repo,
+            }).pipe(Effect.mapError(toRunnerFailure))
             return
           }
+
+          const waitingSince = pullRequest.waitingForGreptileReviewSinceMs
 
           const latestGreptileReview = findLatestGreptileReviewScore(feedback)
 
@@ -162,12 +178,11 @@ export const RunnerLive = Effect.gen(function* () {
             return
           }
 
-          if (feedback.isDraft) {
-            yield* github.markPullRequestReadyForReview({
-              pullRequestNumber: pullRequest.prNumber,
-              repo: pullRequest.repo,
-            }).pipe(Effect.mapError(toRunnerFailure))
-          }
+          yield* github.markPullRequestReadyForReview({
+            isDraft: feedback.isDraft,
+            pullRequestNumber: pullRequest.prNumber,
+            repo: pullRequest.repo,
+          }).pipe(Effect.mapError(toRunnerFailure))
 
           const updatedPullRequest = yield* pullRequestStore.markGreptileCompleted({
             completedAtMs: Date.now(),
