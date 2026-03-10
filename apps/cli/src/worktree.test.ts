@@ -124,6 +124,64 @@ describe("Worktree", () => {
         expect(error.message).toBe("Failed to fetch remote base branch origin/missing.")
       }),
     ))
+
+  it.effect("reuses an existing linked worktree when resuming a tracked branch", () =>
+    withTempCwd(() =>
+      Effect.gen(function* () {
+        const branch = "orca/PET-18-stop-tracking-orca-prs-that-were-merged-or-close-3"
+        const existingDirectory = "/tmp/orca-existing-worktree"
+        const commands: Array<string> = []
+
+        const managed = yield* resumeWorktree({ branch }, {
+          exitCode: (command) => {
+            commands.push(command.shellCommand)
+
+            if (command.shellCommand === "git worktree prune") {
+              return 0
+            }
+
+            if (command.shellCommand === `git show-ref --verify --quiet ${shellQuote(`refs/heads/${branch}`)}`) {
+              return 0
+            }
+
+            if (command.shellCommand === "git worktree list --porcelain") {
+              return 0
+            }
+
+            if (command.shellCommand.startsWith("git worktree remove --force ")) {
+              return 0
+            }
+
+            throw new Error(`Unexpected command: ${command.shellCommand}`)
+          },
+          string: (command) => {
+            commands.push(command.shellCommand)
+
+            if (command.shellCommand === "git worktree list --porcelain") {
+              return [
+                `worktree ${process.cwd()}`,
+                "HEAD 1234567890",
+                "branch refs/heads/main",
+                "",
+                `worktree ${existingDirectory}`,
+                "HEAD abcdef1234",
+                `branch refs/heads/${branch}`,
+                "",
+              ].join("\n")
+            }
+
+            return ""
+          },
+        })
+
+        expect(managed.branch).toBe(branch)
+        expect(managed.directory).toBe(existingDirectory)
+        expect(commands).toContain("git worktree prune")
+        expect(commands).toContain(`git show-ref --verify --quiet ${shellQuote(`refs/heads/${branch}`)}`)
+        expect(commands).toContain("git worktree list --porcelain")
+        expect(commands.some((command) => command.startsWith("git worktree add "))).toBe(false)
+      }),
+    ))
 })
 
 const createWorktree = (
@@ -147,8 +205,26 @@ const createWorktree = (
     })
   }).pipe(Effect.provide(makeWorktreeLayer(spawnerOptions)))
 
+const resumeWorktree = (
+  options: {
+    readonly branch: string
+  },
+  spawnerOptions: {
+    readonly exitCode: (command: CommandInvocation) => number
+    readonly string?: ((command: CommandInvocation) => string) | undefined
+  },
+) =>
+  Effect.gen(function* () {
+    const worktree = yield* Worktree
+    return yield* worktree.resume({
+      branch: options.branch,
+      setup: [],
+    })
+  }).pipe(Effect.provide(makeWorktreeLayer(spawnerOptions)))
+
 const makeWorktreeLayer = (spawnerOptions: {
   readonly exitCode: (command: CommandInvocation) => number
+  readonly string?: ((command: CommandInvocation) => string) | undefined
 }) =>
   WorktreeLayer.pipe(
     Layer.provide(Layer.mergeAll(
@@ -174,12 +250,14 @@ type CommandInvocation = {
 
 const makeTestChildProcessSpawner = (options: {
   readonly exitCode: (command: CommandInvocation) => number
+  readonly string?: ((command: CommandInvocation) => string) | undefined
 }) =>
   ChildProcessSpawner.make((command: ChildProcessCommand) => {
     const invocation = toCommandInvocation(command)
+    const output = new TextEncoder().encode(options.string ? options.string(invocation) : "")
 
     return Effect.succeed(ChildProcessSpawner.makeHandle({
-      all: Stream.empty,
+      all: Stream.fromIterable([output]),
       exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(options.exitCode(invocation))),
       getInputFd: () => Sink.drain,
       getOutputFd: () => Stream.empty,
@@ -188,7 +266,7 @@ const makeTestChildProcessSpawner = (options: {
       pid: ChildProcessSpawner.ProcessId(1),
       stderr: Stream.empty,
       stdin: Sink.drain,
-      stdout: Stream.empty,
+      stdout: Stream.fromIterable([output]),
     }))
   })
 

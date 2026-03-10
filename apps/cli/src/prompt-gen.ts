@@ -197,7 +197,7 @@ ${options.issueDescription.trim().length > 0 ? options.issueDescription : "No de
 
 ## Merge conflict context
 
-- Orca already fetched \`origin/${options.baseBranch}\` and attempted a weave-backed merge with \`git merge --no-commit --no-ff origin/${options.baseBranch}\`.
+- Orca already fetched \`origin/${options.baseBranch}\` and attempted a merge with \`git merge --no-commit --no-ff origin/${options.baseBranch}\`.
 - Resolve the remaining conflicts, keep the merge intact, and leave the existing pull request ready for verification.
 
 ${options.conflictFiles.length > 0 ? `## Unresolved conflict files
