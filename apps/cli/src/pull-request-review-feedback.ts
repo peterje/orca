@@ -88,6 +88,9 @@ export const buildPullRequestReviewPromptInput = (options: {
     ? null
     : parsePendingGreptileReviewScore(latestGreptileScoreEntry.body)
   const activeGreptileScore = reviewScore !== null && reviewScore.value < reviewScore.maximum ? reviewScore : null
+  const freshGreptileScoreEntry = latestGreptileScoreEntryAtMs > options.greptileSince
+    ? latestGreptileScoreEntry
+    : null
 
   const freshHumanThreadFeedbackAtMs = getFreshThreadActivityAtMs(humanThreads, options.humanSince, "human")
   const freshGreptileThreadFeedbackAtMs = getFreshThreadActivityAtMs(unresolvedThreads, options.greptileSince, "greptile")
@@ -105,10 +108,10 @@ export const buildPullRequestReviewPromptInput = (options: {
     || freshGreptileThreadFeedbackAtMs.length > 0
   )
   const promptGreptileComments = hasFreshGreptileFeedback
-    ? includeLatestGreptileScoreComment(greptileComments, latestGreptileScoreEntry, activeGreptileScore)
+    ? includeLatestGreptileScoreComment(greptileComments, freshGreptileScoreEntry, activeGreptileScore)
     : []
   const promptGreptileReviews = hasFreshGreptileFeedback
-    ? includeLatestGreptileScoreReview(greptileReviews, latestGreptileScoreEntry, activeGreptileScore)
+    ? includeLatestGreptileScoreReview(greptileReviews, freshGreptileScoreEntry, activeGreptileScore)
     : []
   const promptGreptileThreads = hasFreshGreptileFeedback ? greptileThreads : []
   const activeGreptileScoreForPrompt = hasFreshGreptileFeedback ? activeGreptileScore : null

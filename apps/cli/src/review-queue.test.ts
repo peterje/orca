@@ -190,14 +190,23 @@ describe("review queue", () => {
             isResolved: false,
           },
         ],
-        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 15, id: "review-2", isBot: true })],
+        reviews: [review({
+          authorLogin: "greptile-apps[bot]",
+          body: "Confidence: 4/5\n\nPlease keep the stale bot guidance.",
+          createdAtMs: 15,
+          id: "review-2",
+          isBot: true,
+        })],
       }),
       pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
     })
 
     expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
     expect(pending?.feedbackMarkdown).toContain("Use the reviewer naming here.")
     expect(pending?.feedbackMarkdown).toContain("I still prefer the bot naming here.")
+    expect(pending?.feedbackMarkdown).not.toContain("Please keep the stale bot guidance.")
     expect(pending?.latestFeedbackAtMs).toBe(30)
   })
 
