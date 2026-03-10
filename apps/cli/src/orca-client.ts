@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { Data, Effect, FileSystem, Layer, Option, PlatformError, Schema, ServiceMap } from "effect"
 import { IssuePlanData, type IssuePlan } from "./issue-planner.ts"
 import { LinearViewerData, type LinearViewer } from "./linear.ts"
@@ -131,8 +132,19 @@ export const OrcaClientLayer = Layer.effect(
       })
 
     const spawnServer = Effect.gen(function* () {
-      const hasDistBinary = yield* fs.exists("dist/orca-server").pipe(Effect.orElseSucceed(() => false))
-      const command = hasDistBinary ? ["./dist/orca-server"] : ["bun", "run", "./apps/server/src/main.ts"]
+      const hasDistBinary = yield* fs.exists(serverBinaryPath).pipe(Effect.orElseSucceed(() => false))
+      const hasSourceEntry = yield* fs.exists(serverSourceEntryPath).pipe(Effect.orElseSucceed(() => false))
+      const command = hasDistBinary
+        ? [serverBinaryPath]
+        : hasSourceEntry
+          ? ["bun", "run", serverSourceEntryPath]
+          : null
+
+      if (command === null) {
+        return yield* Effect.fail(new OrcaClientError({
+          message: `Could not locate the local Orca server binary or source entrypoint. Checked ${serverBinaryPath} and ${serverSourceEntryPath}.`,
+        }))
+      }
 
       yield* Effect.try({
         try: () => {
@@ -365,6 +377,8 @@ const serverStartupPollIntervalMs = 100
 const serverStartupLogIntervalAttempts = 10
 const serverStartupMaxAttempts = 300
 const serverStartupTimeoutMs = serverStartupPollIntervalMs * serverStartupMaxAttempts
+const serverBinaryPath = fileURLToPath(new URL("./orca-server", import.meta.url))
+const serverSourceEntryPath = fileURLToPath(new URL("../../server/src/main.ts", import.meta.url))
 
 const OrcaServerStartupLockData = Schema.Struct({
   pid: Schema.Number,
@@ -428,9 +442,7 @@ const isFileAlreadyExistsError = (cause: unknown) => {
 
   const reason = cause.reason
 
-  return reason === "AlreadyExists"
-    || reason instanceof PlatformError.SystemError && reason._tag === "AlreadyExists"
-    || hasTag(reason, "AlreadyExists")
+  return reason === "AlreadyExists" || hasTag(reason, "AlreadyExists")
 }
 
 const decodeErrorResponse = (response: Response) =>

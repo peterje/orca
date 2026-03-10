@@ -48,6 +48,16 @@ const appLayer = Layer.mergeAll(
 
 const runtime = ManagedRuntime.make(appLayer)
 type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof runtime>
+let runtimeDisposed = false
+
+const disposeRuntimeOnce = async () => {
+  if (runtimeDisposed) {
+    return
+  }
+
+  runtimeDisposed = true
+  await runtime.dispose()
+}
 
 const main = async () => {
   const startedAtMs = Date.now()
@@ -83,7 +93,7 @@ const main = async () => {
     cleanedUp = true
     shuttingDown = true
     try {
-      await runtime.dispose()
+      await disposeRuntimeOnce()
     } finally {
       await server.stop(true)
       await rm(controlFile, { force: true })
@@ -273,6 +283,6 @@ const statusForErrorTag = (errorTag: string | undefined) => statusByErrorTag[err
 
 await main().catch(async (error) => {
   console.error(getErrorMessage(error))
-  await runtime.dispose()
+  await disposeRuntimeOnce()
   process.exit(1)
 })

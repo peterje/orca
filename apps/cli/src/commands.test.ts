@@ -13,7 +13,7 @@ import type { MissionControlSnapshot } from "./mission-control.ts"
 import { OrcaClient } from "./orca-client.ts"
 import { RepoConfig } from "./repo-config.ts"
 import { RunState, type ActiveRun } from "./run-state.ts"
-import { RunnerFailure } from "./runner.ts"
+import { RunnerFailure, RunnerNoWorkError, type RunnerResult } from "./runner.ts"
 
 describe("CLI commands", () => {
   it.effect("renders the issues list with actionable and blocked sections", () =>
@@ -333,6 +333,93 @@ describe("CLI commands", () => {
       ),
     ))
 
+  it.effect("serve --execute runs the selected issue and logs the pull request", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--execute", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(2_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-1 First issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Opened PR for ENG-1: https://github.com/peterje/orca/pull/42",
+        "Mission control",
+        "- current: idle",
+        "- next: nothing ready right now",
+        "- issue queue: 0 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingSnapshotClientLayer(
+            [
+              snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+              snapshot({}),
+              snapshot({}),
+            ],
+            {
+              runNext: Effect.succeed({
+                issueIdentifier: "ENG-1",
+                mode: "implementation",
+                pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+                worktreePath: "/tmp/orca-worktree",
+              }),
+            },
+          ),
+        ),
+      ),
+    ))
+
+  it.effect("serve --execute logs no-work races and keeps polling", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--execute", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(2_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-1 First issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Run failed: No pending pull request reviews or actionable Orca issues are currently available.",
+        "Mission control",
+        "- current: idle",
+        "- next: nothing ready right now",
+        "- issue queue: 0 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingSnapshotClientLayer(
+            [
+              snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
+              snapshot({}),
+              snapshot({}),
+            ],
+            {
+              runNext: Effect.fail(new RunnerNoWorkError({ message: "No pending pull request reviews or actionable Orca issues are currently available." })),
+            },
+          ),
+        ),
+      ),
+    ))
+
   it.effect("status renders the current mission control snapshot", () =>
     Effect.gen(function* () {
       const run = makeStatusCliRunner()
@@ -430,6 +517,7 @@ const sequencingSnapshotClientLayer = (
   snapshots: ReadonlyArray<MissionControlSnapshot>,
   options?: {
     readonly pollWaitingPullRequests?: Effect.Effect<void, RunnerFailure>
+    readonly runNext?: Effect.Effect<RunnerResult, RunnerFailure | RunnerNoWorkError>
   },
 ) =>
   Layer.effect(
@@ -442,7 +530,7 @@ const sequencingSnapshotClientLayer = (
         issuePlan: Effect.die("not used in this test"),
         missionControlSnapshot: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? snapshot({}), current + 1]),
         pollWaitingPullRequests: options?.pollWaitingPullRequests ?? Effect.void,
-        runNext: Effect.die("not used in this test"),
+        runNext: options?.runNext ?? Effect.die("not used in this test"),
       })
     }),
   )
