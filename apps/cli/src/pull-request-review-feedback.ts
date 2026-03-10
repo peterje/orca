@@ -130,6 +130,9 @@ export const buildPullRequestReviewPromptInput = (options: {
     && (latestGreptileScoreEntryAtMs === null || latestFreshGreptileThreadAtMs > latestGreptileScoreEntryAtMs)
   // Fresh standalone Greptile summaries stay suppressed unless there is still an
   // active score or a newer unresolved Greptile thread to act on.
+  // This can still be true without a standalone Greptile section when the only
+  // fresh Greptile activity is a reply on a human-owned mixed thread; that reply
+  // is rendered as human-thread follow-up instead.
   const hasFreshGreptileFeedback = activeGreptileScore !== null
     || hasFreshGreptileThreadFeedback
   const promptHumanThreads = buildPromptHumanThreads({
@@ -263,6 +266,9 @@ const buildPromptHumanThreads = (options: {
   readonly threads: ReadonlyArray<ReviewFeedbackThread>
 }): ReadonlyArray<PromptReviewThread> => {
   if (!options.hasFreshGreptileFeedback) {
+    // When only human feedback is active, keep the full fresh human review batch
+    // visible. The carried-forward cap only applies to older context that stays in
+    // the prompt while newer Greptile feedback is still being addressed.
     return options.threads
       .filter((thread) => hasFreshThreadActivity(thread, options.humanSince, "human"))
       .map(toFreshPromptThread)
