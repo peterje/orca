@@ -9,15 +9,17 @@ import { Linear } from "../../cli/src/linear.ts"
 import { MissionControl, MissionControlLayer } from "../../cli/src/mission-control.ts"
 import { OrcaEvents, OrcaEventsLayer } from "../../cli/src/orca-events.ts"
 import { resolveOrcaDirectory } from "../../cli/src/orca-directory.ts"
-import { OrcaServerControlData, OrcaServerErrorResponse } from "../../cli/src/orca-server-protocol.ts"
+import { OrcaServerControlData, OrcaServerErrorResponse, type OrcaServerEvent } from "../../cli/src/orca-server-protocol.ts"
 import { PromptGenLayer } from "../../cli/src/prompt-gen.ts"
 import { PullRequestStoreLayer } from "../../cli/src/pull-request-store.ts"
-import { RepoConfig, RepoConfigLayer, RepoConfigError } from "../../cli/src/repo-config.ts"
+import { RepoConfig, RepoConfigLayer } from "../../cli/src/repo-config.ts"
 import { Runner, RunnerLayer } from "../../cli/src/runner.ts"
-import { RunStateBusyError, RunStateLayer } from "../../cli/src/run-state.ts"
+import { RunStateLayer } from "../../cli/src/run-state.ts"
 import { PlatformServices } from "../../cli/src/shared/platform.ts"
 import { VerifierLayer } from "../../cli/src/verifier.ts"
 import { WorktreeLayer } from "../../cli/src/worktree.ts"
+
+type ServerReadyEvent = Extract<OrcaServerEvent, { readonly type: "server-ready" }>
 
 const supportLayer = Layer.mergeAll(
   RepoConfigLayer,
@@ -48,10 +50,11 @@ const runtime = ManagedRuntime.make(appLayer)
 const main = async () => {
   const startedAtMs = Date.now()
   const token = crypto.randomUUID()
+  const serverReadyEvent: ServerReadyEvent = { pid: process.pid, startedAtMs, type: "server-ready" }
   let cleanedUp = false
 
   const server = Bun.serve({
-    fetch: (request) => handleRequest(request, token),
+    fetch: (request) => handleRequest(request, { serverReadyEvent, token }),
     hostname: "127.0.0.1",
     port: 0,
   })
@@ -64,12 +67,6 @@ const main = async () => {
   })
 
   await runtime.runPromise(writeServerControl(control))
-  await runtime.runPromise(
-    Effect.gen(function* () {
-      const events = yield* OrcaEvents
-      yield* events.publish({ pid: process.pid, startedAtMs, type: "server-ready" })
-    }),
-  )
 
   const cleanup = async () => {
     if (cleanedUp) {
@@ -89,8 +86,14 @@ const main = async () => {
   })
 }
 
-const handleRequest = async (request: Request, token: string): Promise<Response> => {
-  if (!isAuthorized(request, token)) {
+const handleRequest = async (
+  request: Request,
+  context: {
+    readonly serverReadyEvent: ServerReadyEvent
+    readonly token: string
+  },
+): Promise<Response> => {
+  if (!isAuthorized(request, context.token)) {
     return jsonResponse(new OrcaServerErrorResponse({ message: "Unauthorized Orca server request.", tag: "Unauthorized" }), 401)
   }
 
@@ -130,7 +133,7 @@ const handleRequest = async (request: Request, token: string): Promise<Response>
         return yield* runner.runNext
       }))
     case "GET /events":
-      return openEventStream()
+      return openEventStream(context.serverReadyEvent)
     default:
       return new Response("Not found", { status: 404 })
   }
@@ -154,12 +157,13 @@ const runVoid = async <A, E>(effect: Effect.Effect<A, E, any>): Promise<Response
   }
 }
 
-const openEventStream = async (): Promise<Response> => {
+const openEventStream = async (serverReadyEvent: ServerReadyEvent): Promise<Response> => {
   try {
     const stream = await runtime.runPromise(
       Effect.gen(function* () {
         const events = yield* OrcaEvents
         return events.stream.pipe(
+          Stream.prepend([serverReadyEvent]),
           Stream.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`),
           Stream.encodeText,
         )
@@ -227,23 +231,19 @@ const getErrorTag = (error: unknown) =>
     ? error._tag
     : undefined
 
-const statusForError = (error: unknown) => {
-  if (error instanceof RepoConfigError) {
-    return 400
-  }
-  if (error instanceof RunStateBusyError) {
-    return 409
-  }
-  const tag = getErrorTag(error)
-  switch (tag) {
-    case "LinearAuthRequiredError":
-      return 401
-    case "RunnerNoWorkError":
-      return 404
-    default:
-      return 500
-  }
+const statusByErrorTag: Record<string, number> = {
+  LinearApiError: 502,
+  LinearAuthRequiredError: 401,
+  LinearOAuthError: 401,
+  MissionControlError: 500,
+  RepoConfigError: 400,
+  RunnerFailure: 500,
+  RunnerNoWorkError: 404,
+  RunStateBusyError: 409,
+  Unauthorized: 401,
 }
+
+const statusForError = (error: unknown) => statusByErrorTag[getErrorTag(error) ?? ""] ?? 500
 
 await main().catch(async (error) => {
   console.error(getErrorMessage(error))

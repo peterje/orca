@@ -369,13 +369,16 @@ const isPidRunning = (pid: number) => {
   try {
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    return !hasCode(error, "ESRCH")
   }
 }
 
 const hasTag = <Tag extends string>(value: unknown, tag: Tag): value is { readonly _tag: Tag } =>
   typeof value === "object" && value !== null && "_tag" in value && value._tag === tag
+
+const hasCode = <Code extends string>(value: unknown, code: Code): value is { readonly code: Code } =>
+  typeof value === "object" && value !== null && "code" in value && value.code === code
 
 const hasReason = (value: unknown): value is { readonly reason: unknown } =>
   typeof value === "object" && value !== null && "reason" in value
