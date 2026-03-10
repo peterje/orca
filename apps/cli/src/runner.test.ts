@@ -276,6 +276,64 @@ describe("Runner", () => {
     )
   })
 
+  it.effect("marks waiting pull requests ready for review when the latest Greptile score is posted as a comment", () => {
+    const greptileCompletedPullRequests: Array<{
+      readonly completedAtMs: number
+      readonly lastReviewedAtMs: number
+      readonly prNumber: number
+      readonly repo: string
+    }> = []
+    const readyForReviewRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        expect(yield* runner.peekNext).toEqual(Option.none())
+
+        yield* runner.pollWaitingPullRequests
+
+        expect(readyForReviewRequests).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(greptileCompletedPullRequests).toHaveLength(1)
+        expect(greptileCompletedPullRequests[0]).toMatchObject({
+          lastReviewedAtMs: 30,
+          prNumber: 42,
+          repo: "peterje/orca",
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        greptileCompletedPullRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [
+              comment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence Score: 5/5\n\nSafe to merge.",
+                createdAtMs: 30,
+                id: "comment-2",
+                isBot: true,
+              }),
+            ],
+            isDraft: true,
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        readyForReviewRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
   it.effect("fails polling when a completed Greptile review cannot be recorded in the store", () => {
     const readyForReviewRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
 
@@ -620,6 +678,48 @@ describe("Runner", () => {
             comments: [comment({ authorLogin: "reviewer", body: "Human note", createdAtMs: 12 })],
             number: 42,
             reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 10, isBot: true })],
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    ))
+
+  it.effect("prioritizes actionable review work when Greptile posts the score as a comment", () =>
+    withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const next = yield* runner.peekNext
+
+        expect(Option.getOrNull(next)).toMatchObject({
+          id: "peterje/orca#42",
+          issueIdentifier: "ENG-1",
+          kind: "review",
+          pullRequestNumber: 42,
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "New work" })],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [
+              comment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence Score: 4/5\n\nPlease tighten this up.",
+                createdAtMs: 10,
+                isBot: true,
+              }),
+            ],
+            number: 42,
             url: "https://github.com/peterje/orca/pull/42",
           }),
         },

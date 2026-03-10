@@ -154,7 +154,7 @@ export const RunnerLive = Effect.gen(function* () {
 
           if (
             latestGreptileReview === null
-            || latestGreptileReview.review.createdAtMs < waitingSince
+            || latestGreptileReview.createdAtMs < waitingSince
             || latestGreptileReview.achieved !== 5
             || latestGreptileReview.total !== 5
           ) {
@@ -170,7 +170,7 @@ export const RunnerLive = Effect.gen(function* () {
 
           const updatedPullRequest = yield* pullRequestStore.markGreptileCompleted({
             completedAtMs: Date.now(),
-            lastReviewedAtMs: latestGreptileReview.review.createdAtMs,
+            lastReviewedAtMs: latestGreptileReview.createdAtMs,
             prNumber: pullRequest.prNumber,
             repo: pullRequest.repo,
           }).pipe(Effect.mapError(toRunnerFailure))
