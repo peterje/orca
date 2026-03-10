@@ -100,6 +100,8 @@ export const OrcaClientLayer = Layer.effect(
     const removeControlFile = fs.remove(controlFile).pipe(Effect.catch(() => Effect.void))
     const removeLockFile = fs.remove(lockFile).pipe(Effect.catch(() => Effect.void))
 
+    const logServerStartup = (message: string) => Effect.sync(() => process.stderr.write(`${message}\n`))
+
     const isServerReady = (control: typeof OrcaServerControlData.Type) =>
       Effect.gen(function* () {
         if (!isPidRunning(control.pid)) {
@@ -159,6 +161,12 @@ export const OrcaClientLayer = Layer.effect(
           return true as const
         }
 
+        if (attempt === 0) {
+          yield* logServerStartup("Waiting for another Orca process to finish starting the local server...")
+        } else if (attempt % 10 === 0) {
+          yield* logServerStartup("Still waiting for the local Orca server to start...")
+        }
+
         const controlOption = yield* readControlOption
         if (Option.isSome(controlOption) && (yield* isServerReady(controlOption.value))) {
           return false as const
@@ -184,6 +192,11 @@ export const OrcaClientLayer = Layer.effect(
         if (Option.isSome(controlOption) && (yield* isServerReady(controlOption.value))) {
           return controlOption.value
         }
+
+        if (attempt > 0 && attempt % 10 === 0) {
+          yield* logServerStartup("Still waiting for the local Orca server to start...")
+        }
+
         yield* Effect.sleep("100 millis")
       }
 
@@ -208,6 +221,7 @@ export const OrcaClientLayer = Layer.effect(
         }
 
         yield* removeControlFile
+        yield* logServerStartup("Starting local Orca server...")
         yield* spawnServer
         return yield* waitForServer
       }).pipe(Effect.ensuring(removeLockFile))

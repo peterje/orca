@@ -47,6 +47,7 @@ const appLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(PlatformServices))
 
 const runtime = ManagedRuntime.make(appLayer)
+type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof runtime>
 
 const main = async () => {
   const startedAtMs = Date.now()
@@ -153,13 +154,13 @@ const handleRequest = async (
         return yield* runner.runNext
       }))
     case "GET /events":
-      return openEventStream(context.serverReadyEvent)
+      return openEventStream(request, context.serverReadyEvent)
     default:
       return new Response("Not found", { status: 404 })
   }
 }
 
-const runJson = async <A, E>(effect: Effect.Effect<A, E, any>): Promise<Response> => {
+const runJson = async <A, E>(effect: Effect.Effect<A, E, AppServices>): Promise<Response> => {
   try {
     const value = await runtime.runPromise(effect)
     return jsonResponse(value)
@@ -168,7 +169,7 @@ const runJson = async <A, E>(effect: Effect.Effect<A, E, any>): Promise<Response
   }
 }
 
-const runVoid = async <A, E>(effect: Effect.Effect<A, E, any>): Promise<Response> => {
+const runVoid = async <A, E>(effect: Effect.Effect<A, E, AppServices>): Promise<Response> => {
   try {
     await runtime.runPromise(effect)
     return new Response(null, { status: 204 })
@@ -177,9 +178,10 @@ const runVoid = async <A, E>(effect: Effect.Effect<A, E, any>): Promise<Response
   }
 }
 
-const openEventStream = async (serverReadyEvent: ServerReadyEvent): Promise<Response> => {
+const openEventStream = async (request: Request, serverReadyEvent: ServerReadyEvent): Promise<Response> => {
   try {
-    const stream = await runtime.runPromise(
+    const services = await runtime.services()
+    const stream = Effect.runSyncWith(services)(
       Effect.gen(function* () {
         const events = yield* OrcaEvents
         return events.stream.pipe(
@@ -189,8 +191,18 @@ const openEventStream = async (serverReadyEvent: ServerReadyEvent): Promise<Resp
         )
       }),
     )
+    const readableStream = Stream.toReadableStreamWith(stream, services)
+    const cancelReadableStream = () => {
+      void readableStream.cancel().catch(() => undefined)
+    }
 
-    return new Response(Stream.toReadableStream(stream), {
+    if (request.signal.aborted) {
+      cancelReadableStream()
+    } else {
+      request.signal.addEventListener("abort", cancelReadableStream, { once: true })
+    }
+
+    return new Response(readableStream, {
       headers: {
         "cache-control": "no-cache",
         connection: "keep-alive",
