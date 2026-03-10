@@ -55,6 +55,27 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).toContain("Please keep this branch scoped.")
   })
 
+  it("treats an edited Greptile score comment as fresh feedback", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [
+          comment({
+            authorLogin: "greptile-apps[bot]",
+            body: "Confidence Score: 4/5\n\nPlease keep this branch scoped.",
+            createdAtMs: 10,
+            isBot: true,
+            updatedAtMs: 120,
+          }),
+        ],
+      }),
+      pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.latestFeedbackAtMs).toBe(120)
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+  })
+
   it("ignores human review feedback in the Greptile loop", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
@@ -246,6 +267,7 @@ const comment = (overrides?: Partial<PullRequestFeedback["comments"][number]>) =
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "comment-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => ({
@@ -254,6 +276,7 @@ const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => 
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "review-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][number]["comments"][number]>) => ({
@@ -265,4 +288,5 @@ const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][
   isBot: overrides?.isBot ?? false,
   originalLine: overrides?.originalLine ?? 1,
   path: overrides?.path ?? "apps/cli/src/runner.ts",
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
