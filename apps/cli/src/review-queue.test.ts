@@ -149,6 +149,7 @@ describe("review queue", () => {
     expect(pending).not.toBeNull()
     expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
     expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("If human and Greptile feedback conflict, follow the human feedback first")
     expect(pending?.feedbackMarkdown).toContain("Use the human naming here.")
     expect(pending?.feedbackMarkdown).toContain("source=\"greptile\"")
     expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")

@@ -106,6 +106,8 @@ export const buildPullRequestReviewPromptInput = (options: {
     || freshHumanThreadTimestampsMs.length > 0
   const hasFreshGreptileThreadFeedback = latestFreshGreptileThreadAtMs !== null
     && latestFreshGreptileThreadAtMs > latestGreptileScoreEntryAtMs
+  // Fresh standalone Greptile summaries stay suppressed unless there is still an
+  // active score or a newer unresolved Greptile thread to act on.
   const hasFreshGreptileFeedback = activeGreptileScore !== null
     || hasFreshGreptileThreadFeedback
   const promptHumanThreads = hasFreshGreptileFeedback ? humanThreads : freshHumanThreads
