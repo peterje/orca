@@ -49,7 +49,6 @@ const appLayer = Layer.mergeAll(
 const runtime = ManagedRuntime.make(appLayer)
 type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof runtime>
 let runtimeDisposed = false
-let startupCleanup: (() => Promise<void>) | null = null
 
 const disposeRuntimeOnce = async () => {
   if (runtimeDisposed) {
@@ -60,18 +59,58 @@ const disposeRuntimeOnce = async () => {
   await runtime.dispose()
 }
 
+let startupCleanup: () => Promise<void> = disposeRuntimeOnce
+
 const main = async () => {
   const startedAtMs = Date.now()
   const token = crypto.randomUUID()
   const serverReadyEvent: ServerReadyEvent = { pid: process.pid, startedAtMs, type: "server-ready" }
-  const orcaDirectory = await runtime.runPromise(resolveOrcaDirectory())
-  const controlFile = `${orcaDirectory}/server.json`
   let cleanedUp = false
   let pollingWaitingPullRequests = false
   let runningNext = false
+  let controlFile: string | null = null
+  let server: ReturnType<typeof Bun.serve> | null = null
   let shuttingDown = false
 
-  const server = Bun.serve({
+  const cleanup = async () => {
+    if (cleanedUp) {
+      return
+    }
+
+    cleanedUp = true
+    shuttingDown = true
+
+    try {
+      if (controlFile !== null) {
+        await rm(controlFile, { force: true })
+      }
+    } finally {
+      try {
+        if (server !== null) {
+          await server.stop(true)
+        }
+      } finally {
+        await disposeRuntimeOnce()
+      }
+    }
+  }
+
+  startupCleanup = cleanup
+
+  const exitAfterCleanup = () => {
+    void (async () => {
+      await cleanup().catch(() => undefined)
+      process.exit(0)
+    })()
+  }
+
+  process.once("SIGINT", exitAfterCleanup)
+  process.once("SIGTERM", exitAfterCleanup)
+
+  const orcaDirectory = await runtime.runPromise(resolveOrcaDirectory())
+  controlFile = `${orcaDirectory}/server.json`
+
+  server = Bun.serve({
     fetch: (request) => handleRequest(request, {
       isShuttingDown: () => shuttingDown,
       runPollWaitingPullRequests: (effect) => {
@@ -102,37 +141,6 @@ const main = async () => {
     hostname: "127.0.0.1",
     port: 0,
   })
-
-  const cleanup = async () => {
-    if (cleanedUp) {
-      return
-    }
-
-    cleanedUp = true
-    shuttingDown = true
-
-    try {
-      await rm(controlFile, { force: true })
-    } finally {
-      try {
-        await server.stop(true)
-      } finally {
-        await disposeRuntimeOnce()
-      }
-    }
-  }
-
-  startupCleanup = cleanup
-
-  const exitAfterCleanup = () => {
-    void (async () => {
-      await cleanup().catch(() => undefined)
-      process.exit(0)
-    })()
-  }
-
-  process.once("SIGINT", exitAfterCleanup)
-  process.once("SIGTERM", exitAfterCleanup)
 
   const control = new OrcaServerControlData({
     baseUrl: `http://${server.hostname}:${server.port}`,
@@ -332,11 +340,7 @@ const statusForErrorTag = (errorTag: string | undefined) => statusByErrorTag[err
 await main().catch(async (error) => {
   console.error(getErrorMessage(error))
   try {
-    if (startupCleanup !== null) {
-      await startupCleanup()
-    } else {
-      await disposeRuntimeOnce()
-    }
+    await startupCleanup()
   } finally {
     process.exit(1)
   }

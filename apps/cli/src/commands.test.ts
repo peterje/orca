@@ -367,6 +367,42 @@ describe("CLI commands", () => {
       ),
     ))
 
+  it.effect("serve keeps polling when mission control snapshot loading fails", () =>
+    Effect.gen(function* () {
+      const run = makeServeCliRunner()
+      const fiber = yield* Effect.forkChild(run(["serve", "--interval-seconds", "1"]))
+
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(2_000)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* TestConsole.logLines).toEqual([
+        "Failed to load mission control snapshot: boom",
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-1 First issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+        "Mission control",
+        "- current: idle",
+        "- next: ENG-2 Second issue - ready to pick up",
+        "- issue queue: 1 ready to pick up, 0 blocked",
+        "- review queue: 0 waiting for review, 0 ready for follow-up",
+      ])
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          cliEnvironmentLayer,
+          TestConsole.layer,
+          sequencingSnapshotOutcomeClientLayer([
+            Effect.fail(new RunnerFailure({ message: "boom" })),
+            Effect.succeed(snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } })),
+            Effect.succeed(snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } })),
+          ]),
+        ),
+      ),
+    ))
+
   it.effect("serve --execute runs the selected issue and logs the pull request", () =>
     Effect.gen(function* () {
       const run = makeServeCliRunner()
@@ -563,6 +599,30 @@ const sequencingSnapshotClientLayer = (
         authenticate: Effect.die("not used in this test"),
         issuePlan: Effect.die("not used in this test"),
         missionControlSnapshot: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? snapshot({}), current + 1]),
+        pollWaitingPullRequests: options?.pollWaitingPullRequests ?? Effect.void,
+        runNext: options?.runNext ?? Effect.die("not used in this test"),
+      })
+    }),
+  )
+
+const sequencingSnapshotOutcomeClientLayer = (
+  outcomes: ReadonlyArray<Effect.Effect<MissionControlSnapshot, RunnerFailure>>,
+  options?: {
+    readonly pollWaitingPullRequests?: Effect.Effect<void, RunnerFailure>
+    readonly runNext?: Effect.Effect<RunnerResult, RunnerFailure | RunnerNoWorkError>
+  },
+) =>
+  Layer.effect(
+    OrcaClient,
+    Effect.gen(function* () {
+      const index = yield* Ref.make(0)
+
+      return OrcaClient.of({
+        authenticate: Effect.die("not used in this test"),
+        issuePlan: Effect.die("not used in this test"),
+        missionControlSnapshot: Ref.modify(index, (current) => [Math.min(current, outcomes.length - 1), current + 1]).pipe(
+          Effect.flatMap((current) => outcomes[current] ?? Effect.succeed(snapshot({}))),
+        ),
         pollWaitingPullRequests: options?.pollWaitingPullRequests ?? Effect.void,
         runNext: options?.runNext ?? Effect.die("not used in this test"),
       })

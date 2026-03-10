@@ -255,6 +255,7 @@ export const OrcaClientLayer = Layer.effect(
         const startupLockOption = yield* readStartupLockOption
         if (Option.isSome(startupLockOption) && !isPidRunning(startupLockOption.value.pid)) {
           yield* removeLockFile
+          // Another Orca process may claim the lock before our next write attempt.
           continue
         }
 

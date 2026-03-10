@@ -26,7 +26,16 @@ export const commandServe = Command.make(
         Effect.tapError((error) => Console.log(`Failed to poll waiting pull requests: ${formatErrorMessage(error)}`)),
         Effect.orElseSucceed(() => undefined),
       )
-      const snapshot = yield* client.missionControlSnapshot
+      const snapshot = yield* client.missionControlSnapshot.pipe(
+        Effect.tapError((error) => Console.log(`Failed to load mission control snapshot: ${formatErrorMessage(error)}`)),
+        Effect.orElseSucceed(() => null),
+      )
+
+      if (snapshot === null) {
+        yield* Effect.sleep(Duration.seconds(intervalSeconds))
+        continue
+      }
+
       const snapshotKey = JSON.stringify(snapshot)
       if (snapshot.current !== null || snapshot.next !== null) {
         emptyPolls = 0
