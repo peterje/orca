@@ -233,6 +233,7 @@ describe("Runner", () => {
                     isBot: true,
                     originalLine: 1,
                     path: "apps/cli/src/runner.ts",
+                    updatedAtMs: 5,
                   },
                 ],
                 isCollapsed: false,
@@ -246,6 +247,7 @@ describe("Runner", () => {
                 createdAtMs: 20,
                 id: "review-1",
                 isBot: true,
+                updatedAtMs: 20,
               },
               {
                 authorLogin: "greptile-apps[bot]",
@@ -253,6 +255,7 @@ describe("Runner", () => {
                 createdAtMs: 30,
                 id: "review-2",
                 isBot: true,
+                updatedAtMs: 30,
               },
             ],
             url: "https://github.com/peterje/orca/pull/42",
@@ -332,6 +335,63 @@ describe("Runner", () => {
     )
   })
 
+  it.effect("marks waiting pull requests ready for review when Greptile edits an existing score comment", () => {
+    const greptileCompletedPullRequests: Array<{
+      readonly completedAtMs: number
+      readonly lastReviewedAtMs: number
+      readonly prNumber: number
+      readonly repo: string
+    }> = []
+    const readyForReviewRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        yield* runner.pollWaitingPullRequests
+
+        expect(readyForReviewRequests).toEqual([{ pullRequestNumber: 42, repo: "peterje/orca" }])
+        expect(greptileCompletedPullRequests).toHaveLength(1)
+        expect(greptileCompletedPullRequests[0]).toMatchObject({
+          lastReviewedAtMs: 30,
+          prNumber: 42,
+          repo: "peterje/orca",
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        greptileCompletedPullRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [
+              comment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence Score: 5/5\n\nSafe to merge.",
+                createdAtMs: 10,
+                id: "comment-2",
+                isBot: true,
+                updatedAtMs: 30,
+              }),
+            ],
+            isDraft: true,
+            number: 42,
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        readyForReviewRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 20,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
   it.effect("fails polling when a completed Greptile review cannot be recorded in the store", () => {
     const readyForReviewRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
 
@@ -355,6 +415,7 @@ describe("Runner", () => {
                 createdAtMs: 30,
                 id: "review-2",
                 isBot: true,
+                updatedAtMs: 30,
               },
             ],
             url: "https://github.com/peterje/orca/pull/42",
@@ -1416,6 +1477,7 @@ const comment = (overrides?: Partial<PullRequestFeedback["comments"][number]>) =
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "comment-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => ({
@@ -1424,6 +1486,7 @@ const review = (overrides?: Partial<PullRequestFeedback["reviews"][number]>) => 
   createdAtMs: overrides?.createdAtMs ?? 1,
   id: overrides?.id ?? "review-1",
   isBot: overrides?.isBot ?? false,
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][number]["comments"][number]>) => ({
@@ -1435,6 +1498,7 @@ const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][
   isBot: overrides?.isBot ?? false,
   originalLine: overrides?.originalLine ?? 1,
   path: overrides?.path ?? "apps/cli/src/runner.ts",
+  updatedAtMs: overrides?.updatedAtMs ?? overrides?.createdAtMs ?? 1,
 })
 
 const makeManagedWorktree = (options: {

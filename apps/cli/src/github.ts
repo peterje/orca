@@ -15,6 +15,7 @@ export type PullRequestComment = {
   readonly createdAtMs: number
   readonly id: string
   readonly isBot: boolean
+  readonly updatedAtMs: number
 }
 
 export type PullRequestReview = {
@@ -23,6 +24,7 @@ export type PullRequestReview = {
   readonly createdAtMs: number
   readonly id: string
   readonly isBot: boolean
+  readonly updatedAtMs: number
 }
 
 export type PullRequestReviewComment = PullRequestComment & {
@@ -392,6 +394,7 @@ type PullRequestNodeCommentJson = {
   readonly body?: string
   readonly createdAt?: string
   readonly id?: string
+  readonly updatedAt?: string
 }
 
 type PullRequestNodeReviewJson = PullRequestNodeCommentJson
@@ -410,23 +413,27 @@ type PullRequestNodeReviewThreadJson = {
 
 const mapComment = (comment: PullRequestNodeCommentJson): PullRequestComment => {
   const authorLogin = normalizeAuthorLogin(comment.author?.login)
+  const createdAtMs = parseDate(comment.createdAt)
   return {
     authorLogin,
     body: typeof comment.body === "string" ? comment.body : "",
-    createdAtMs: parseDate(comment.createdAt),
+    createdAtMs,
     id: typeof comment.id === "string" ? comment.id : "",
     isBot: isBotLogin(authorLogin),
+    updatedAtMs: Math.max(createdAtMs, parseDate(comment.updatedAt)),
   }
 }
 
 const mapReview = (review: PullRequestNodeReviewJson): PullRequestReview => {
   const authorLogin = normalizeAuthorLogin(review.author?.login)
+  const createdAtMs = parseDate(review.createdAt)
   return {
     authorLogin,
     body: typeof review.body === "string" ? review.body : "",
-    createdAtMs: parseDate(review.createdAt),
+    createdAtMs,
     id: typeof review.id === "string" ? review.id : "",
     isBot: isBotLogin(authorLogin),
+    updatedAtMs: Math.max(createdAtMs, parseDate(review.updatedAt)),
   }
 }
 
@@ -438,15 +445,17 @@ const mapReviewThread = (thread: PullRequestNodeReviewThreadJson): PullRequestRe
 
 const mapReviewComment = (comment: PullRequestNodeReviewCommentJson): PullRequestReviewComment => {
   const authorLogin = normalizeAuthorLogin(comment.author?.login)
+  const createdAtMs = parseDate(comment.createdAt)
   return {
     authorLogin,
     body: typeof comment.body === "string" ? comment.body : "",
-    createdAtMs: parseDate(comment.createdAt),
+    createdAtMs,
     diffHunk: typeof comment.diffHunk === "string" ? comment.diffHunk : "",
     id: typeof comment.id === "string" ? comment.id : "",
     isBot: isBotLogin(authorLogin),
     originalLine: typeof comment.originalLine === "number" ? comment.originalLine : null,
     path: typeof comment.path === "string" ? comment.path : "unknown",
+    updatedAtMs: Math.max(createdAtMs, parseDate(comment.updatedAt)),
   }
 }
 
@@ -481,6 +490,7 @@ query PullRequestFeedback($owner: String!, $repo: String!, $pr: Int!) {
           id
           body
           createdAt
+          updatedAt
           author {
             login
           }
@@ -495,6 +505,7 @@ query PullRequestFeedback($owner: String!, $repo: String!, $pr: Int!) {
               id
               body
               createdAt
+              updatedAt
               path
               originalLine
               diffHunk
@@ -510,6 +521,7 @@ query PullRequestFeedback($owner: String!, $repo: String!, $pr: Int!) {
           id
           body
           createdAt
+          updatedAt
           author {
             login
           }
