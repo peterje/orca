@@ -48,7 +48,8 @@ type GreptileScoreEntry =
 
 export const buildPullRequestReviewPromptInput = (options: {
   readonly feedback: PullRequestFeedback
-  readonly since: number
+  readonly greptileSince: number
+  readonly humanSince: number
 }): PullRequestReviewPromptInput | null => {
   const unresolvedThreads = options.feedback.reviewThreads
     .filter((thread) => !thread.isCollapsed && !thread.isResolved)
@@ -62,23 +63,23 @@ export const buildPullRequestReviewPromptInput = (options: {
   const humanComments = options.feedback.comments
     .filter((comment) => comment.body.trim().length > 0)
     .map(classifyComment)
-    .filter((comment) => comment.source === "human" && getEntryActivityAtMs(comment) > options.since)
+    .filter((comment) => comment.source === "human" && getEntryActivityAtMs(comment) > options.humanSince)
     .sort(compareEntries)
   const humanReviews = options.feedback.reviews
     .filter((review) => review.body.trim().length > 0)
     .map(classifyReview)
-    .filter((review) => review.source === "human" && getEntryActivityAtMs(review) > options.since)
+    .filter((review) => review.source === "human" && getEntryActivityAtMs(review) > options.humanSince)
     .sort(compareEntries)
 
   const greptileComments = options.feedback.comments
     .filter((comment) => comment.body.trim().length > 0)
     .map(classifyComment)
-    .filter((comment) => comment.source === "greptile" && getEntryActivityAtMs(comment) > options.since)
+    .filter((comment) => comment.source === "greptile" && getEntryActivityAtMs(comment) > options.greptileSince)
     .sort(compareEntries)
   const greptileReviews = options.feedback.reviews
     .filter((review) => review.body.trim().length > 0)
     .map(classifyReview)
-    .filter((review) => review.source === "greptile" && getEntryActivityAtMs(review) > options.since)
+    .filter((review) => review.source === "greptile" && getEntryActivityAtMs(review) > options.greptileSince)
     .sort(compareEntries)
 
   const latestGreptileScoreEntry = findLatestGreptileScoreEntry(options.feedback)
@@ -98,12 +99,12 @@ export const buildPullRequestReviewPromptInput = (options: {
 
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0
-    || hasFreshThreadFeedback(humanThreads, "human", options.since)
+    || hasFreshThreadFeedback(humanThreads, "human", options.humanSince)
   const hasFreshGreptileFeedback = activeGreptileScore !== null && (
-    latestGreptileScoreEntryAtMs > options.since
+    latestGreptileScoreEntryAtMs > options.greptileSince
     || greptileComments.length > 0
     || greptileReviews.length > 0
-    || hasFreshThreadFeedback(unresolvedThreads, "greptile", options.since)
+    || hasFreshThreadFeedback(unresolvedThreads, "greptile", options.greptileSince)
   )
 
   if (!hasFreshHumanFeedback && !hasFreshGreptileFeedback) {
@@ -113,10 +114,10 @@ export const buildPullRequestReviewPromptInput = (options: {
   const latestFeedbackAtMs = findLatestNumber([
     ...humanComments.map(getEntryActivityAtMs),
     ...humanReviews.map(getEntryActivityAtMs),
-    ...getFreshThreadActivityAtMs(humanThreads, options.since),
+    ...getFreshThreadActivityAtMs(humanThreads, options.humanSince),
     ...promptGreptileComments.map(getEntryActivityAtMs),
     ...promptGreptileReviews.map(getEntryActivityAtMs),
-    ...getFreshThreadActivityAtMs(promptGreptileThreads, options.since, "greptile"),
+    ...getFreshThreadActivityAtMs(promptGreptileThreads, options.greptileSince, "greptile"),
   ])
 
   if (latestFeedbackAtMs === null) {

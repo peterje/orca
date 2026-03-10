@@ -33,13 +33,14 @@ export const findPendingPullRequestReview = (options: {
     return null
   }
 
-  const since = Math.max(
-    options.pullRequest.lastReviewedAtMs ?? 0,
-    options.pullRequest.waitingForGreptileReviewSinceMs ?? 0,
-  )
+  const lastReviewedAtMs = options.pullRequest.lastReviewedAtMs ?? 0
   const reviewPromptInput = buildPullRequestReviewPromptInput({
     feedback: options.feedback,
-    since,
+    greptileSince: Math.max(
+      lastReviewedAtMs,
+      options.pullRequest.waitingForGreptileReviewSinceMs ?? 0,
+    ),
+    humanSince: lastReviewedAtMs,
   })
 
   if (reviewPromptInput === null) {
