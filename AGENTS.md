@@ -3,7 +3,8 @@
 - use the bun runtime instead of node
 - use the most up to date version of effect's v4 beta.
 - always consult the effect source code in ~/.reference/effect-v4/ before writing code to see if it provides a primitive already, and to see how to implement.
-- use ~/workspace/lalph as a reference for implementing this project
+- use ~/Workspace/lalph as a reference for implementing this project
+- use ~/Workspace/symphony as a reference for implementing symphony features.
 - use kebab-case for all file names.
 </general>
 
