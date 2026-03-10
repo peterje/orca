@@ -23,6 +23,7 @@ export type LinearIssue = {
   readonly state: string
   readonly teamStates: ReadonlyArray<LinearWorkflowState>
   readonly title: string
+  readonly workspaceSlug?: string | undefined
 }
 
 export type LinearWorkflowState = {
@@ -160,7 +161,6 @@ export const LinearLive = Layer.effect(
 
       return mapLinearIssues(collected)
         .filter((issue) => normalizedWorkspaceSlug === undefined || issue.workspaceSlug === normalizedWorkspaceSlug)
-        .map(({ workspaceSlug: _workspaceSlug, ...issue }) => issue)
         .sort(compareLinearIssues)
     })
 

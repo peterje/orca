@@ -68,16 +68,14 @@ describe("Runner", () => {
           {
             baseBranch: "main",
             body: [
-              "this pr brings example issue into the repo so the requested behavior is ready for review.",
+              "**closes**",
+              "[ENG-1](https://linear.app/peteredm/issue/ENG-1)",
               "",
-              "### changes",
-              "#### 1. deliver example issue",
-              "this keeps the branch focused on the requested outcome and ready for the usual review flow.",
+              "**summary**",
+              "this updates example issue so the pull request stays tied to the ticket and gives reviewers a clear explanation of the requested outcome.",
               "",
-              "### verification",
+              "**verification**",
               "- `bun run check`",
-              "",
-              "closes ENG-1",
             ].join("\n"),
             cwd: worktreeDirectory,
             draft: true,
@@ -1503,6 +1501,7 @@ const issue = (overrides: Partial<LinearIssue> & Pick<LinearIssue, "id" | "ident
   state: overrides.state ?? "unstarted",
   teamStates: overrides.teamStates ?? [],
   title: overrides.title,
+  workspaceSlug: overrides.workspaceSlug ?? "peteredm",
 })
 
 const filterIssuesByWorkspace = (issues: ReadonlyArray<LinearIssue>, workspaceSlug: string | undefined) => {
