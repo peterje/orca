@@ -21,6 +21,7 @@ describe("review queue", () => {
 
     expect(pending).not.toBeNull()
     expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toContain("# Pull request review feedback")
     expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
     expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
     expect(pending?.feedbackMarkdown).toContain("Please keep this branch scoped.")
@@ -76,7 +77,7 @@ describe("review queue", () => {
     expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
   })
 
-  it("ignores human review feedback in the Greptile loop", () => {
+  it("creates pending review work from human feedback", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
         comments: [comment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 60 })],
@@ -92,7 +93,45 @@ describe("review queue", () => {
       pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
 
-    expect(pending).toBeNull()
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("source=\"human\"")
+    expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.feedbackMarkdown).toContain("If human and Greptile feedback conflict")
+  })
+
+  it("keeps unresolved human feedback alongside a later Greptile round", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({ authorLogin: "reviewer", body: "Use the human naming here.", createdAtMs: 60 }),
+              reviewComment({ authorLogin: "greptile-apps[bot]", body: "I would rename this to use the bot naming.", createdAtMs: 65, isBot: true, id: "review-comment-2" }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please simplify this branch.", createdAtMs: 118, isBot: true, id: "review-comment-3" })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 120, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 80, waitingForGreptileReviewSinceMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("Use the human naming here.")
+    expect(pending?.feedbackMarkdown).toContain("source=\"greptile\"")
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
+    expect(pending?.latestFeedbackAtMs).toBe(120)
   })
 
   it("suppresses duplicate review requests while Greptile has not responded yet", () => {

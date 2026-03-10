@@ -77,6 +77,35 @@ describe("tracked pull request queue", () => {
       expect(removedPullRequests).toEqual([])
     }))
 
+  it.effect("creates pending review work for completed pull requests with unresolved human feedback", () =>
+    Effect.gen(function* () {
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileCompletedAtMs: 30,
+              issueId: "issue-8",
+              issueIdentifier: "ENG-8",
+              lastReviewedAtMs: 20,
+              prNumber: 50,
+              prUrl: "https://github.com/peterje/orca/pull/50",
+            }),
+          ]),
+          remove: () => Effect.succeed(false),
+        },
+      })
+
+      expect(queue.pendingReviews.map((review) => review.pullRequest.issueIdentifier)).toEqual(["ENG-8"])
+      expect(queue.waitingForReviewPullRequests).toEqual([])
+    }))
+
   it.effect("prunes terminal pull requests that were closed or merged before reload", () =>
     Effect.gen(function* () {
       const removedPullRequests: Array<string> = []
@@ -193,7 +222,7 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
     reviews: [
       {
         authorLogin: "greptile-apps[bot]",
-        body: "Confidence: 4/5",
+        body: "Confidence: 5/5",
         createdAtMs: 24,
         id: "review-47",
         isBot: true,
@@ -204,6 +233,20 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
   }),
   "peterje/orca#48": pullRequestFeedback({ number: 48, state: "CLOSED", url: "https://github.com/peterje/orca/pull/48" }),
   "peterje/orca#49": pullRequestFeedback({ number: 49, state: "MERGED", url: "https://github.com/peterje/orca/pull/49" }),
+  "peterje/orca#50": pullRequestFeedback({
+    comments: [
+      {
+        authorLogin: "reviewer",
+        body: "Please keep the human-approved wording here.",
+        createdAtMs: 40,
+        id: "comment-50",
+        isBot: false,
+        updatedAtMs: 40,
+      },
+    ],
+    number: 50,
+    url: "https://github.com/peterje/orca/pull/50",
+  }),
 }
 
 const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Type> & Pick<typeof OrcaManagedPullRequest.Type, "issueId" | "issueIdentifier" | "prNumber" | "prUrl">) =>

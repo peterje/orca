@@ -68,13 +68,13 @@ export const summarizeTrackedPullRequestQueue = (
       continue
     }
 
-    if (!isTrackedForGreptileLoop(trackedPullRequest.pullRequest)) {
-      continue
-    }
-
     const pendingReview = findPendingPullRequestReview(trackedPullRequest)
     if (pendingReview !== null) {
       pendingReviews.push(pendingReview)
+      continue
+    }
+
+    if (!isTrackedForGreptileLoop(trackedPullRequest.pullRequest)) {
       continue
     }
 

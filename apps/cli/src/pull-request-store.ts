@@ -186,6 +186,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
 
         updated = new OrcaManagedPullRequest({
           ...record,
+          greptileCompletedAtMs: null,
           lastReviewedAtMs: options.lastReviewedAtMs,
           updatedAtMs: now,
           waitingForGreptileReviewSinceMs: options.waitingForGreptileReviewSinceMs,
