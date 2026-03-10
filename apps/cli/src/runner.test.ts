@@ -321,6 +321,7 @@ describe("Runner", () => {
   })
 
   it.effect("removes waiting pull requests that were merged or closed outside Orca during polling", () => {
+    const linearComments: Array<{ readonly body: string; readonly issueId: string }> = []
     const removedPullRequests: Array<string> = []
     const readPullRequestFeedbackRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
 
@@ -333,6 +334,24 @@ describe("Runner", () => {
         expect(readPullRequestFeedbackRequests).toEqual([
           { pullRequestNumber: 41, repo: "peterje/orca" },
           { pullRequestNumber: 42, repo: "peterje/orca" },
+        ])
+        expect(linearComments).toEqual([
+          {
+            body: [
+              "Orca stopped tracking the pull request for ENG-1 because it was closed outside Orca.",
+              "",
+              "- PR: https://github.com/peterje/orca/pull/41",
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+          {
+            body: [
+              "Orca stopped tracking the pull request for ENG-2 because it was merged outside Orca.",
+              "",
+              "- PR: https://github.com/peterje/orca/pull/42",
+            ].join("\n"),
+            issueId: "issue-2",
+          },
         ])
         expect(removedPullRequests).toEqual(["peterje/orca#41", "peterje/orca#42"])
       }).pipe(Effect.provide(makeRunnerLayer({
@@ -349,6 +368,7 @@ describe("Runner", () => {
           "peterje/orca#43": pullRequestFeedback({ number: 43, state: "CLOSED", url: "https://github.com/peterje/orca/pull/43" }),
           "peterje/orca#44": pullRequestFeedback({ number: 44, state: "MERGED", url: "https://github.com/peterje/orca/pull/44" }),
         },
+        linearComments,
         removedPullRequests,
         readPullRequestFeedbackRequests,
         trackedPullRequests: [
@@ -1066,6 +1086,7 @@ const makeRunnerLayer = (options: {
     readonly prNumber: number
     readonly repo: string
   }>
+  readonly linearComments?: Array<{ readonly body: string; readonly issueId: string }>
   readonly markGreptileCompletedReturnsNull?: boolean
   readonly mergeConflictPromptRequests?: Array<{
     readonly baseBranch: string
@@ -1142,6 +1163,7 @@ const makeRunnerLayer = (options: {
   const mergeConflictPromptRequests = options.mergeConflictPromptRequests ?? []
   const removedPullRequests = options.removedPullRequests ?? []
   const greptileCompletedPullRequests = options.greptileCompletedPullRequests ?? []
+  const linearComments = options.linearComments ?? []
   const readPullRequestFeedbackRequests = options.readPullRequestFeedbackRequests ?? []
   const readyForReviewRequests = options.readyForReviewRequests ?? []
   const recordedGreptileReviewRequests = options.recordedGreptileReviewRequests ?? []
@@ -1214,7 +1236,10 @@ const makeRunnerLayer = (options: {
           Linear,
           Linear.of({
             authenticate: Effect.die("not used in this test"),
-            commentOnIssue: () => Effect.void,
+            commentOnIssue: (request) =>
+              Effect.sync(() => {
+                linearComments.push(request)
+              }),
             issues: Effect.succeed(
               options.issues ?? [issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Example issue" })],
             ),

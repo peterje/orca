@@ -146,6 +146,14 @@ export const RunnerLive = Effect.gen(function* () {
             repo: pullRequest.repo,
           }).pipe(Effect.mapError(toRunnerFailure))
           if (feedback.state.toUpperCase() !== "OPEN") {
+            yield* linear.commentOnIssue({
+              body: [
+                `Orca stopped tracking the pull request for ${pullRequest.issueIdentifier} because it was ${feedback.state.toLowerCase()} outside Orca.`,
+                "",
+                `- PR: ${pullRequest.prUrl}`,
+              ].join("\n"),
+              issueId: pullRequest.issueId,
+            }).pipe(Effect.mapError(toRunnerFailure))
             yield* pullRequestStore.remove({
               prNumber: pullRequest.prNumber,
               repo: pullRequest.repo,
