@@ -41,6 +41,7 @@ export const OrcaClientLayer = Layer.effect(
     const controlFile = `${orcaDirectory}/server.json`
     const lockFile = `${orcaDirectory}/server.lock`
     const serverLogFile = `${orcaDirectory}/server.log`
+    let cachedControl: typeof OrcaServerControlData.Type | null = null
 
     const readControlOption = Effect.gen(function* () {
       const exists = yield* fs.exists(controlFile).pipe(
@@ -108,6 +109,23 @@ export const OrcaClientLayer = Layer.effect(
     const prepareServerLogFile = fs.writeFileString(serverLogFile, "").pipe(
       Effect.mapError((cause) => new OrcaClientError({ message: `Failed to prepare ${serverLogFile}.`, cause })),
     )
+
+    const clearCachedControl = Effect.sync(() => {
+      cachedControl = null
+    })
+
+    const readCachedControlOption = Effect.sync(() => {
+      if (cachedControl === null) {
+        return Option.none<typeof OrcaServerControlData.Type>()
+      }
+
+      if (!isPidRunning(cachedControl.pid)) {
+        cachedControl = null
+        return Option.none<typeof OrcaServerControlData.Type>()
+      }
+
+      return Option.some(cachedControl)
+    })
 
     const logServerStartup = (message: string) => Effect.sync(() => process.stderr.write(`${message}\n`))
 
@@ -304,6 +322,17 @@ export const OrcaClientLayer = Layer.effect(
       }).pipe(Effect.ensuring(removeLockFile))
     })
 
+    const getServerControl = Effect.gen(function* () {
+      const cachedControlOption = yield* readCachedControlOption
+      if (Option.isSome(cachedControlOption)) {
+        return cachedControlOption.value
+      }
+
+      const control = yield* ensureServer
+      cachedControl = control
+      return control
+    })
+
     const fetchServerResponse = (options: {
       readonly control: typeof OrcaServerControlData.Type
       readonly method: "GET" | "POST"
@@ -331,7 +360,12 @@ export const OrcaClientLayer = Layer.effect(
           cause instanceof OrcaClientError
             ? cause
             : new OrcaClientError({ message: `Failed to contact the local Orca server at ${options.control.baseUrl}.`, cause }),
-      })
+      }).pipe(Effect.tapError(() => clearCachedControl))
+
+    const invalidateCachedControlIfNeeded = (response: Response) =>
+      response.status === 401 || response.status === 503
+        ? clearCachedControl
+        : Effect.void
 
     const request = <A>(options: {
       readonly decode: (json: unknown) => Effect.Effect<A, OrcaClientRequestError>
@@ -340,7 +374,7 @@ export const OrcaClientLayer = Layer.effect(
       readonly timeoutMs?: number
     }) =>
       Effect.gen(function* () {
-        const control = yield* ensureServer
+        const control = yield* getServerControl
         const response = yield* fetchServerResponse({
           control,
           method: options.method,
@@ -349,6 +383,7 @@ export const OrcaClientLayer = Layer.effect(
         })
 
         if (!response.ok) {
+          yield* invalidateCachedControlIfNeeded(response)
           return yield* Effect.fail(yield* decodeErrorResponse(response))
         }
 
@@ -362,7 +397,7 @@ export const OrcaClientLayer = Layer.effect(
 
     const requestVoid = (path: string) =>
       Effect.gen(function* () {
-        const control = yield* ensureServer
+        const control = yield* getServerControl
         const response = yield* fetchServerResponse({
           control,
           method: "POST",
@@ -371,6 +406,7 @@ export const OrcaClientLayer = Layer.effect(
         })
 
         if (!response.ok) {
+          yield* invalidateCachedControlIfNeeded(response)
           return yield* Effect.fail(yield* decodeErrorResponse(response))
         }
       })

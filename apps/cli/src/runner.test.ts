@@ -10,7 +10,7 @@ import { OrcaEvents } from "./orca-events.ts"
 import type { OrcaServerEvent } from "./orca-server-protocol.ts"
 import { PromptGen } from "./prompt-gen.ts"
 import { PullRequestStore, OrcaManagedPullRequest } from "./pull-request-store.ts"
-import { RepoConfig, RepoConfigData } from "./repo-config.ts"
+import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
 import { Runner, RunnerFailure, RunnerLayer, reportFailureCause } from "./runner.ts"
 import { RunState, RunStateBusyError, type ActiveRun } from "./run-state.ts"
 import { Verifier } from "./verifier.ts"
@@ -1394,6 +1394,52 @@ describe("Runner", () => {
             issueId: "issue-1",
           },
         ])
+      })),
+    )
+  })
+
+  it.effect("skips reporting non-reportable failure causes", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+
+    const github = {
+      viewCurrentPullRequest: () => Effect.succeed(Option.none()),
+    } as unknown as GitHubService
+
+    const linear = {
+      commentOnIssue: (request: { readonly body: string; readonly issueId: string }) =>
+        Effect.sync(() => {
+          issueComments.push(request)
+        }),
+    } as unknown as LinearService
+
+    return reportFailureCause({
+      cause: Cause.fromReasons([
+        Cause.makeFailReason(new RepoConfigError({ message: "Missing repo config" })),
+      ]),
+      github,
+      issue: {
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+      },
+      linear,
+      managedWorktree: {
+        directory: "/tmp/orca-worktree",
+      },
+    }).pipe(
+      Effect.provide(Layer.succeed(
+        OrcaEvents,
+        OrcaEvents.of({
+          publish: (event) =>
+            Effect.sync(() => {
+              publishedEvents.push(event)
+            }),
+          stream: Stream.empty,
+        }),
+      )),
+      Effect.andThen(Effect.sync(() => {
+        expect(publishedEvents).toEqual([])
+        expect(issueComments).toEqual([])
       })),
     )
   })

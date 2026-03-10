@@ -126,12 +126,15 @@ const main = async () => {
 
   startupCleanup = cleanup
 
-  process.once("SIGINT", () => {
-    void cleanup().finally(() => process.exit(0))
-  })
-  process.once("SIGTERM", () => {
-    void cleanup().finally(() => process.exit(0))
-  })
+  const exitAfterCleanup = () => {
+    void (async () => {
+      await cleanup().catch(() => undefined)
+      process.exit(0)
+    })()
+  }
+
+  process.once("SIGINT", exitAfterCleanup)
+  process.once("SIGTERM", exitAfterCleanup)
 
   const control = new OrcaServerControlData({
     baseUrl: `http://${server.hostname}:${server.port}`,

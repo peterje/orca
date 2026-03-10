@@ -1057,17 +1057,6 @@ export const reportFailureCause = (options: {
     })
   }
 
-  const failure = failures[0]
-  if (failure !== undefined) {
-    return reportFailure({
-      error: failure,
-      github: options.github,
-      issue: options.issue,
-      linear: options.linear,
-      managedWorktree: options.managedWorktree,
-    })
-  }
-
   return Effect.void
 }
 
