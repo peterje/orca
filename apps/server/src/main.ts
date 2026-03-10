@@ -33,7 +33,7 @@ const supportLayer = Layer.mergeAll(
   PullRequestStoreLayer,
   VerifierLayer,
   GitHubLayer,
-)
+).pipe(Layer.provide(PlatformServices))
 
 const executionLayer = RunnerLayer.pipe(Layer.provide([LinearLayer, supportLayer]))
 const missionControlLayer = MissionControlLayer.pipe(Layer.provide([LinearLayer, supportLayer]))

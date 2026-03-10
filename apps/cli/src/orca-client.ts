@@ -363,10 +363,24 @@ export const OrcaClientLayer = Layer.effect(
             : new OrcaClientError({ message: `Failed to contact the local Orca server at ${options.control.baseUrl}.`, cause }),
       }).pipe(Effect.tapError(() => clearCachedControl))
 
-    const invalidateCachedControlIfNeeded = (response: Response) =>
-      response.status === 401 || response.status === 503
-        ? clearCachedControl
-        : Effect.void
+    const invalidateCachedControlIfNeeded = (response: Response, control: typeof OrcaServerControlData.Type) => {
+      if (response.status === 503) {
+        return clearCachedControl
+      }
+
+      if (response.status !== 401) {
+        return Effect.void
+      }
+
+      return Effect.gen(function* () {
+        yield* clearCachedControl
+
+        const currentControlOption = yield* readControlOption
+        if (Option.isSome(currentControlOption) && isSameServerControl(currentControlOption.value, control)) {
+          yield* removeControlFile
+        }
+      })
+    }
 
     const request = <A>(options: {
       readonly decode: (json: unknown) => Effect.Effect<A, OrcaClientRequestError>
@@ -384,7 +398,7 @@ export const OrcaClientLayer = Layer.effect(
         })
 
         if (!response.ok) {
-          yield* invalidateCachedControlIfNeeded(response)
+          yield* invalidateCachedControlIfNeeded(response, control)
           return yield* Effect.fail(yield* decodeErrorResponse(response))
         }
 
@@ -407,7 +421,7 @@ export const OrcaClientLayer = Layer.effect(
         })
 
         if (!response.ok) {
-          yield* invalidateCachedControlIfNeeded(response)
+          yield* invalidateCachedControlIfNeeded(response, control)
           return yield* Effect.fail(yield* decodeErrorResponse(response))
         }
       })
@@ -582,6 +596,15 @@ const isPidRunning = (pid: number) => {
     return !hasCode(error, "ESRCH")
   }
 }
+
+const isSameServerControl = (
+  left: typeof OrcaServerControlData.Type,
+  right: typeof OrcaServerControlData.Type,
+) =>
+  left.baseUrl === right.baseUrl
+  && left.pid === right.pid
+  && left.startedAtMs === right.startedAtMs
+  && left.token === right.token
 
 const hasTag = <Tag extends string>(value: unknown, tag: Tag): value is { readonly _tag: Tag } =>
   typeof value === "object" && value !== null && "_tag" in value && value._tag === tag

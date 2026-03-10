@@ -1026,7 +1026,7 @@ export const reportFailureCause = (options: {
 }) => {
   const failures = options.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)
   const reportableFailures = [
-    ...failures.filter((error): error is RunnerFailure => error instanceof RunnerFailure),
+    ...failures.filter((error): error is RunnerFailure => error._tag === "RunnerFailure"),
     ...options.cause.reasons.filter(Cause.isDieReason).map((reason) =>
       new RunnerFailure({
         cause: reason.defect,

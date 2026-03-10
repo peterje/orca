@@ -1398,6 +1398,72 @@ describe("Runner", () => {
     )
   })
 
+  it.effect("treats tagged runner failures as reportable without relying on instanceof", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+    const worktreeDirectory = "/tmp/orca-worktree"
+
+    const github = {
+      viewCurrentPullRequest: () => Effect.succeed(Option.none()),
+    } as unknown as GitHubService
+
+    const linear = {
+      commentOnIssue: (request: { readonly body: string; readonly issueId: string }) =>
+        Effect.sync(() => {
+          issueComments.push(request)
+        }),
+    } as unknown as LinearService
+
+    return reportFailureCause({
+      cause: Cause.fromReasons([
+        Cause.makeFailReason({
+          _tag: "RunnerFailure",
+          message: "Agent failed from alternate loader",
+        } as RunnerFailure),
+      ]),
+      github,
+      issue: {
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+      },
+      linear,
+      managedWorktree: {
+        directory: worktreeDirectory,
+      },
+    }).pipe(
+      Effect.provide(Layer.succeed(
+        OrcaEvents,
+        OrcaEvents.of({
+          publish: (event) =>
+            Effect.sync(() => {
+              publishedEvents.push(event)
+            }),
+          stream: Stream.empty,
+        }),
+      )),
+      Effect.andThen(Effect.sync(() => {
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            message: "Agent failed from alternate loader",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Agent failed from alternate loader",
+              `- Worktree: ${worktreeDirectory}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      })),
+    )
+  })
+
   it.effect("publishes run-failed for non-reportable failure causes without commenting", () => {
     const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
     const publishedEvents: Array<OrcaServerEvent> = []
