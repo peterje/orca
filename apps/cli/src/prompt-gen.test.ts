@@ -70,7 +70,7 @@ describe("PromptGen", () => {
       expect(result.promptFileContents).toContain("- If you update the PR description, keep the same lowercase narrative format with `**closes**`, `**summary**`, and `**verification**`.")
     }).pipe(Effect.provide(makePromptGenLayer())))
 
-  it.effect("guides merge conflict follow-up after weave leaves conflicts behind", () =>
+  it.effect("guides merge conflict follow-up after a merge leaves conflicts behind", () =>
     Effect.gen(function* () {
       const promptGen = yield* PromptGen
       const result = yield* promptGen.buildMergeConflictPrompt({
@@ -86,7 +86,7 @@ describe("PromptGen", () => {
 
       expect(result.prompt).toContain("merge conflicts")
       expect(result.promptFileContents).toContain("## Merge conflict context")
-      expect(result.promptFileContents).toContain("weave-backed merge")
+      expect(result.promptFileContents).toContain("attempted a merge")
       expect(result.promptFileContents).toContain("apps/cli/src/runner.ts")
       expect(result.promptFileContents).toContain("- Resolve all remaining merge conflicts before finishing.")
       expect(result.promptFileContents).toContain("- Use a conventional commit message every time you create a commit.")

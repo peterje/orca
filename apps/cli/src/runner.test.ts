@@ -483,7 +483,7 @@ describe("Runner", () => {
     })
   })
 
-  it.effect("syncs tracked pull requests with the base branch before new implementation work", () => {
+  it.effect("syncs tracked pull requests with the base branch even without weave", () => {
     const agentRunRequests: Array<{
       readonly agent: string
       readonly cwd: string
@@ -569,6 +569,8 @@ describe("Runner", () => {
             waitingForGreptileReviewSinceMs: 10,
           }),
         ],
+        weaveDriver: null,
+        weaveVersionExitCode: 1,
         worktreeCommandLog,
         worktreeDirectory,
       })))

@@ -792,8 +792,6 @@ const syncTrackedPullRequestWithBase = (options: {
   readonly worktree: ManagedWorktree
 }): Effect.Effect<BaseSyncOutcome, RunnerFailure> =>
   Effect.gen(function* () {
-    yield* ensureWeaveConfigured(options.worktree).pipe(Effect.mapError(toRunnerFailure))
-
     const fetchExit = yield* options.worktree.run(`git fetch origin ${shellQuote(options.baseBranch)}`).pipe(Effect.mapError(toRunnerFailure))
     if (fetchExit !== 0) {
       return yield* Effect.fail(new RunnerFailure({ message: `Failed to fetch origin/${options.baseBranch} before syncing the pull request.` }))
@@ -814,18 +812,6 @@ const syncTrackedPullRequestWithBase = (options: {
     return {
       conflictFiles,
       kind: "agent-required",
-    }
-  })
-
-const ensureWeaveConfigured = (worktree: ManagedWorktree): Effect.Effect<void, RunnerFailure> =>
-  Effect.gen(function* () {
-    const mergeDriver = (yield* worktree.runString("git config --get merge.weave.driver").pipe(Effect.orElseSucceed(() => ""))).trim()
-
-    const weaveVersionExit = yield* worktree.run("weave --version >/dev/null 2>&1").pipe(Effect.mapError(toRunnerFailure))
-    if (weaveVersionExit !== 0 || mergeDriver.length === 0) {
-      return yield* Effect.fail(new RunnerFailure({
-        message: "Tracked pull request sync requires weave. Install `weave` and run `weave setup` in this repo before Orca tries again.",
-      }))
     }
   })
 

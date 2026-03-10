@@ -93,7 +93,22 @@ export const WorktreeLive = Effect.gen(function* () {
         Effect.mapError((cause) => new WorktreeError({ message: `Failed to create ${worktreesRoot}.`, cause })),
       )
 
+      yield* pruneWorktrees({ repoRoot, spawner })
+
       yield* ensureLocalBranch({ branch: options.branch, repoRoot, spawner })
+
+      const existingDirectory = yield* findExistingWorktreeDirectory({
+        branch: options.branch,
+        repoRoot,
+        spawner,
+      })
+
+      if (existingDirectory !== null) {
+        const managed = makeManagedWorktree({ branch: options.branch, directory: existingDirectory, repoRoot, spawner })
+        yield* runSetup(managed, options.setup)
+
+        return managed
+      }
 
       const directory = yield* allocateResumeDirectory({
         baseDirectory: worktreesRoot,
@@ -238,6 +253,40 @@ const ensureLocalBranch = (options: {
     }
   })
 
+const pruneWorktrees = (options: {
+  readonly repoRoot: string
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]
+}) =>
+  options.spawner.exitCode(
+    makeShellCommand({
+      command: "git worktree prune",
+      cwd: options.repoRoot,
+    }),
+  ).pipe(
+    Effect.mapError((cause) => new WorktreeError({ message: "Failed to prune git worktrees.", cause })),
+    Effect.flatMap((exitCode) =>
+      exitCode === 0
+        ? Effect.void
+        : Effect.fail(new WorktreeError({ message: `git worktree prune exited with status ${exitCode}.` }))),
+  )
+
+const findExistingWorktreeDirectory = (options: {
+  readonly branch: string
+  readonly repoRoot: string
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]
+}) =>
+  options.spawner.string(
+    makeShellCommand({
+      command: "git worktree list --porcelain",
+      cwd: options.repoRoot,
+    }),
+    { includeStderr: true },
+  ).pipe(
+    Effect.map(parseWorktreeList),
+    Effect.map((worktrees) => worktrees.find((worktree) => worktree.branch === options.branch)?.directory ?? null),
+    Effect.mapError((cause) => new WorktreeError({ message: "Failed to inspect existing git worktrees.", cause })),
+  )
+
 const ensureRemoteBaseBranch = (options: {
   readonly baseBranch: string
   readonly repoRoot: string
@@ -288,6 +337,24 @@ const runSetup = (managed: ManagedWorktree, commands: ReadonlyArray<string>) =>
       }
     }
   })
+
+const parseWorktreeList = (raw: string): Array<{ readonly branch: string | null; readonly directory: string }> =>
+  raw
+    .trim()
+    .split("\n\n")
+    .map((section) => section.trim())
+    .filter((section) => section.length > 0)
+    .map((section) => {
+      const lines = section.split("\n")
+      const directory = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length) ?? ""
+      const branchRef = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length) ?? null
+
+      return {
+        branch: branchRef?.startsWith("refs/heads/") ? branchRef.slice("refs/heads/".length) : null,
+        directory,
+      }
+    })
+    .filter((entry) => entry.directory.length > 0)
 
 const makeManagedWorktree = (options: {
   readonly branch: string
