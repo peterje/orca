@@ -36,15 +36,14 @@ const executionLayer = RunnerLayer.pipe(Layer.provide([linearLayer, supportLayer
 const missionControlLayer = MissionControlLayer.pipe(Layer.provide([linearLayer, supportLayer]))
 
 const appLayer = Layer.mergeAll(
-  PlatformServices,
   linearLayer,
   supportLayer,
   executionLayer,
   missionControlLayer,
   OrcaEventsLayer,
-)
+).pipe(Layer.provideMerge(PlatformServices))
 
-const runtime = ManagedRuntime.make(appLayer.pipe(Layer.provide(PlatformServices)))
+const runtime = ManagedRuntime.make(appLayer)
 
 const main = async () => {
   const startedAtMs = Date.now()

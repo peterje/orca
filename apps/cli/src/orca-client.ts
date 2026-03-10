@@ -1,9 +1,9 @@
-import { Data, Effect, FileSystem, Layer, Option, Schema, ServiceMap } from "effect"
-import type { IssuePlan } from "./issue-planner.ts"
-import type { LinearViewer } from "./linear.ts"
+import { Data, Effect, FileSystem, Layer, Option, PlatformError, Schema, ServiceMap } from "effect"
+import { IssuePlanData, type IssuePlan } from "./issue-planner.ts"
+import { LinearViewerData, type LinearViewer } from "./linear.ts"
 import { LinearApiError } from "./linear.ts"
 import { LinearAuthRequiredError, LinearOAuthError } from "./linear/token-manager.ts"
-import { MissionControlError, type MissionControlSnapshot } from "./mission-control.ts"
+import { MissionControlError, MissionControlSnapshotData, type MissionControlSnapshot } from "./mission-control.ts"
 import { resolveOrcaDirectory } from "./orca-directory.ts"
 import { OrcaServerControlData, OrcaServerErrorResponse, RunnerResultData } from "./orca-server-protocol.ts"
 import { RepoConfigError } from "./repo-config.ts"
@@ -35,7 +35,9 @@ export const OrcaClientLayer = Layer.effect(
   OrcaClient,
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const controlFile = yield* Effect.map(resolveOrcaDirectory(), (directory) => `${directory}/server.json`)
+    const orcaDirectory = yield* resolveOrcaDirectory()
+    const controlFile = `${orcaDirectory}/server.json`
+    const lockFile = `${orcaDirectory}/server.lock`
 
     const readControlOption = Effect.gen(function* () {
       const exists = yield* fs.exists(controlFile).pipe(
@@ -69,6 +71,7 @@ export const OrcaClientLayer = Layer.effect(
     )
 
     const removeControlFile = fs.remove(controlFile).pipe(Effect.catch(() => Effect.void))
+    const removeLockFile = fs.remove(lockFile).pipe(Effect.catch(() => Effect.void))
 
     const isServerReady = (control: typeof OrcaServerControlData.Type) =>
       Effect.gen(function* () {
@@ -107,6 +110,41 @@ export const OrcaClientLayer = Layer.effect(
       })
     })
 
+    const acquireSpawnLock = Effect.gen(function* () {
+      yield* fs.makeDirectory(orcaDirectory, { recursive: true }).pipe(
+        Effect.mapError((cause) => new OrcaClientError({ message: `Failed to create ${orcaDirectory}.`, cause })),
+      )
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const acquired = yield* fs.writeFileString(
+          lockFile,
+          JSON.stringify(Schema.encodeUnknownSync(OrcaServerStartupLockData)({ pid: process.pid, startedAtMs: Date.now() }), null, 2) + "\n",
+          { flag: "wx" },
+        ).pipe(
+          Effect.as(true as const),
+          Effect.catch((cause) =>
+            isFileAlreadyExistsError(cause)
+              ? Effect.succeed(false as const)
+              : Effect.fail(new OrcaClientError({ message: `Failed to acquire ${lockFile}.`, cause }))),
+        )
+
+        if (acquired) {
+          return true as const
+        }
+
+        const controlOption = yield* readControlOption
+        if (Option.isSome(controlOption) && (yield* isServerReady(controlOption.value))) {
+          return false as const
+        }
+
+        yield* Effect.sleep("100 millis")
+      }
+
+      return yield* Effect.fail(
+        new OrcaClientError({ message: "Timed out waiting for another Orca process to finish starting the local server." }),
+      )
+    })
+
     const waitForServer = Effect.gen(function* () {
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const controlOption = yield* readControlOption
@@ -125,9 +163,21 @@ export const OrcaClientLayer = Layer.effect(
         return controlOption.value
       }
 
-      yield* removeControlFile
-      yield* spawnServer
-      return yield* waitForServer
+      const acquiredSpawnLock = yield* acquireSpawnLock
+      if (!acquiredSpawnLock) {
+        return yield* waitForServer
+      }
+
+      return yield* Effect.gen(function* () {
+        const currentControlOption = yield* readControlOption
+        if (Option.isSome(currentControlOption) && (yield* isServerReady(currentControlOption.value))) {
+          return currentControlOption.value
+        }
+
+        yield* removeControlFile
+        yield* spawnServer
+        return yield* waitForServer
+      }).pipe(Effect.ensuring(removeLockFile))
     })
 
     const request = <A>(options: {
@@ -180,19 +230,19 @@ export const OrcaClientLayer = Layer.effect(
       })
 
     const authenticate = request({
-      decode: decodeJson<LinearViewer>(),
+      decode: decodeJson(LinearViewerData, "The local Orca server returned an invalid Linear viewer payload."),
       method: "POST",
       path: "/linear/auth",
     })
 
     const issuePlan = request({
-      decode: decodeJson<IssuePlan>(),
+      decode: decodeJson(IssuePlanData, "The local Orca server returned an invalid issue plan."),
       method: "GET",
       path: "/issues/plan",
     })
 
     const missionControlSnapshot = request({
-      decode: decodeJson<MissionControlSnapshot>(),
+      decode: decodeJson(MissionControlSnapshotData, "The local Orca server returned an invalid mission control snapshot."),
       method: "GET",
       path: "/mission-control/snapshot",
     })
@@ -200,10 +250,7 @@ export const OrcaClientLayer = Layer.effect(
     const pollWaitingPullRequests = requestVoid("/runner/poll-waiting-pull-requests")
 
     const runNext = request({
-      decode: (json) =>
-        Schema.decodeUnknownEffect(RunnerResultData)(json).pipe(
-          Effect.mapError((cause) => new OrcaClientError({ message: "The local Orca server returned an invalid runner result.", cause })),
-        ) as Effect.Effect<RunnerResult, OrcaClientError>,
+      decode: decodeJson(RunnerResultData, "The local Orca server returned an invalid runner result."),
       method: "POST",
       path: "/runner/run-next",
     })
@@ -223,7 +270,20 @@ export class OrcaClientError extends Data.TaggedError("OrcaClientError")<{
   readonly cause?: unknown
 }> {}
 
-const decodeJson = <A>() => (json: unknown) => Effect.succeed(json as A)
+const OrcaServerStartupLockData = Schema.Struct({
+  pid: Schema.Number,
+  startedAtMs: Schema.Number,
+})
+
+const decodeJson = <A, I, RD, RE>(schema: Schema.Codec<A, I, RD, RE>, message: string) => (json: unknown) =>
+  Schema.decodeUnknownEffect(schema)(json).pipe(
+    Effect.mapError((cause) => new OrcaClientError({ message, cause })),
+  )
+
+const isFileAlreadyExistsError = (cause: unknown) =>
+  cause instanceof PlatformError.PlatformError
+  && cause.reason instanceof PlatformError.SystemError
+  && cause.reason._tag === "AlreadyExists"
 
 const decodeErrorResponse = (response: Response) =>
   Effect.gen(function* () {
