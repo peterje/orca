@@ -4,6 +4,7 @@
   "type": "module",
   "version": "0.0.0",
   "dependencies": {
+    "@orca/cli": "workspace:*",
     "@effect/platform-bun": "4.0.0-beta.29",
     "effect": "4.0.0-beta.29"
   },

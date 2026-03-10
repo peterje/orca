@@ -26,6 +26,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-bun": "4.0.0-beta.29",
+        "@orca/cli": "workspace:*",
         "effect": "4.0.0-beta.29",
       },
       "devDependencies": {

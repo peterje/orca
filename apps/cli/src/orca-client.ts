@@ -154,7 +154,7 @@ export const OrcaClientLayer = Layer.effect(
         Effect.mapError((cause) => new OrcaClientError({ message: `Failed to create ${orcaDirectory}.`, cause })),
       )
 
-      for (let attempt = 0; attempt < 100; attempt += 1) {
+      for (let attempt = 0; attempt < serverStartupMaxAttempts; attempt += 1) {
         const acquired = yield* fs.writeFileString(
           lockFile,
           JSON.stringify(Schema.encodeUnknownSync(OrcaServerStartupLockData)({ pid: process.pid, startedAtMs: Date.now() }), null, 2) + "\n",
@@ -173,7 +173,7 @@ export const OrcaClientLayer = Layer.effect(
 
         if (attempt === 0) {
           yield* logServerStartup("Waiting for another Orca process to finish starting the local server...")
-        } else if (attempt % 10 === 0) {
+        } else if (attempt % serverStartupLogIntervalAttempts === 0) {
           yield* logServerStartup("Still waiting for the local Orca server to start...")
         }
 
@@ -188,29 +188,33 @@ export const OrcaClientLayer = Layer.effect(
           continue
         }
 
-        yield* Effect.sleep("100 millis")
+        yield* Effect.sleep(serverStartupPollIntervalMs)
       }
 
       return yield* Effect.fail(
-        new OrcaClientError({ message: "Timed out waiting for another Orca process to finish starting the local server." }),
+        new OrcaClientError({
+          message: `Timed out waiting ${formatTimeoutDuration(serverStartupTimeoutMs)} for another Orca process to finish starting the local server.`,
+        }),
       )
     })
 
     const waitForServer = Effect.gen(function* () {
-      for (let attempt = 0; attempt < 100; attempt += 1) {
+      for (let attempt = 0; attempt < serverStartupMaxAttempts; attempt += 1) {
         const controlOption = yield* readControlOption
         if (Option.isSome(controlOption) && (yield* isServerReady(controlOption.value))) {
           return controlOption.value
         }
 
-        if (attempt > 0 && attempt % 10 === 0) {
+        if (attempt > 0 && attempt % serverStartupLogIntervalAttempts === 0) {
           yield* logServerStartup("Still waiting for the local Orca server to start...")
         }
 
-        yield* Effect.sleep("100 millis")
+        yield* Effect.sleep(serverStartupPollIntervalMs)
       }
 
-      return yield* Effect.fail(new OrcaClientError({ message: "Timed out waiting for the local Orca server to start." }))
+      return yield* Effect.fail(
+        new OrcaClientError({ message: `Timed out waiting ${formatTimeoutDuration(serverStartupTimeoutMs)} for the local Orca server to start.` }),
+      )
     })
 
     const ensureServer = Effect.gen(function* () {
@@ -357,6 +361,10 @@ export class OrcaClientError extends Data.TaggedError("OrcaClientError")<{
 const defaultServerHealthCheckTimeoutMs = 5_000
 const defaultServerRequestTimeoutMs = 60_000
 const defaultRunNextTimeoutBufferMinutes = 5
+const serverStartupPollIntervalMs = 100
+const serverStartupLogIntervalAttempts = 10
+const serverStartupMaxAttempts = 300
+const serverStartupTimeoutMs = serverStartupPollIntervalMs * serverStartupMaxAttempts
 
 const OrcaServerStartupLockData = Schema.Struct({
   pid: Schema.Number,

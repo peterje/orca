@@ -236,12 +236,13 @@ const jsonResponse = (value: unknown, status = 200) =>
   })
 
 const errorResponse = (error: unknown) => {
+  const errorTag = getErrorTag(error)
   const payload = new OrcaServerErrorResponse({
     message: getErrorMessage(error),
-    ...(getErrorTag(error) === undefined ? {} : { tag: getErrorTag(error) }),
+    ...(errorTag === undefined ? {} : { tag: errorTag }),
   })
 
-  return jsonResponse(Schema.encodeUnknownSync(OrcaServerErrorResponse)(payload), statusForError(error))
+  return jsonResponse(Schema.encodeUnknownSync(OrcaServerErrorResponse)(payload), statusForErrorTag(errorTag))
 }
 
 const getErrorMessage = (error: unknown) => {
@@ -268,7 +269,7 @@ const statusByErrorTag: Record<string, number> = {
   Unauthorized: 401,
 }
 
-const statusForError = (error: unknown) => statusByErrorTag[getErrorTag(error) ?? ""] ?? 500
+const statusForErrorTag = (errorTag: string | undefined) => statusByErrorTag[errorTag ?? ""] ?? 500
 
 await main().catch(async (error) => {
   console.error(getErrorMessage(error))
