@@ -65,11 +65,22 @@ const main = async () => {
   const token = crypto.randomUUID()
   const serverReadyEvent: ServerReadyEvent = { pid: process.pid, startedAtMs, type: "server-ready" }
   let cleanedUp = false
+  let pollingWaitingPullRequests = false
   let shuttingDown = false
 
   const server = Bun.serve({
     fetch: (request) => handleRequest(request, {
       isShuttingDown: () => shuttingDown,
+      runPollWaitingPullRequests: (effect) => {
+        if (pollingWaitingPullRequests) {
+          return Promise.resolve(new Response(null, { status: 204 }))
+        }
+
+        pollingWaitingPullRequests = true
+        return runVoid(effect).finally(() => {
+          pollingWaitingPullRequests = false
+        })
+      },
       serverReadyEvent,
       token,
     }),
@@ -102,6 +113,13 @@ const main = async () => {
 
   startupCleanup = cleanup
 
+  process.once("SIGINT", () => {
+    void cleanup().finally(() => process.exit(0))
+  })
+  process.once("SIGTERM", () => {
+    void cleanup().finally(() => process.exit(0))
+  })
+
   const control = new OrcaServerControlData({
     baseUrl: `http://${server.hostname}:${server.port}`,
     pid: process.pid,
@@ -111,19 +129,13 @@ const main = async () => {
   controlFile = await runtime.runPromise(resolveOrcaDirectory().pipe(Effect.map((orcaDirectory) => `${orcaDirectory}/server.json`)))
 
   await runtime.runPromise(writeServerControl(control))
-
-  process.on("SIGINT", () => {
-    void cleanup().finally(() => process.exit(0))
-  })
-  process.on("SIGTERM", () => {
-    void cleanup().finally(() => process.exit(0))
-  })
 }
 
 const handleRequest = async (
   request: Request,
   context: {
     readonly isShuttingDown: () => boolean
+    readonly runPollWaitingPullRequests: <E>(effect: Effect.Effect<void, E, AppServices>) => Promise<Response>
     readonly serverReadyEvent: ServerReadyEvent
     readonly token: string
   },
@@ -166,7 +178,7 @@ const handleRequest = async (
         return yield* missionControl.snapshot
       }))
     case "POST /runner/poll-waiting-pull-requests":
-      return runVoid(Effect.gen(function* () {
+      return context.runPollWaitingPullRequests(Effect.gen(function* () {
         const runner = yield* Runner
         yield* runner.pollWaitingPullRequests
       }))
