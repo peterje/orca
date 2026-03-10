@@ -102,6 +102,27 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).not.toContain("If human and Greptile feedback conflict")
   })
 
+  it("does not resurface stale human threads when only a later human comment is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please also update the helper docs.", createdAtMs: 40 })],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "reviewer", body: "Old human thread", createdAtMs: 10 })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("Please also update the helper docs.")
+    expect(pending?.feedbackMarkdown).not.toContain("Old human thread")
+    expect(pending?.latestFeedbackAtMs).toBe(40)
+  })
+
   it("keeps unresolved human feedback alongside a later Greptile round", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
@@ -325,6 +346,29 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
     expect(pending?.feedbackMarkdown).toContain("The helper still needs the Greptile-approved name.")
     expect(pending?.feedbackMarkdown).not.toContain("Confidence: 4/5")
+    expect(pending?.latestFeedbackAtMs).toBe(120)
+  })
+
+  it("omits stale Greptile threads when only a new failing score is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Old Greptile thread", createdAtMs: 80, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 120, isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 90, waitingForGreptileReviewSinceMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
+    expect(pending?.feedbackMarkdown).not.toContain("Old Greptile thread")
     expect(pending?.latestFeedbackAtMs).toBe(120)
   })
 

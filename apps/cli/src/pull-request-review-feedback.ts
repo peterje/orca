@@ -94,9 +94,11 @@ export const buildPullRequestReviewPromptInput = (options: {
     ? freshGreptileReviewScore
     : null
 
-  const freshHumanThreadTimestampsMs = getFreshThreadTimestampsMs(humanThreads, options.humanSince, "human")
+  const freshHumanThreads = filterFreshThreads(humanThreads, options.humanSince, "human")
+  const freshHumanThreadTimestampsMs = getFreshThreadTimestampsMs(freshHumanThreads, options.humanSince, "human")
 
-  const freshGreptileThreadTimestampsMs = getFreshThreadTimestampsMs(greptileThreads, options.greptileSince)
+  const freshGreptileThreads = filterFreshThreads(greptileThreads, options.greptileSince)
+  const freshGreptileThreadTimestampsMs = getFreshThreadTimestampsMs(freshGreptileThreads, options.greptileSince)
   const latestFreshGreptileThreadAtMs = findLatestNumber(freshGreptileThreadTimestampsMs)
 
   const hasFreshHumanFeedback = humanComments.length > 0
@@ -106,13 +108,14 @@ export const buildPullRequestReviewPromptInput = (options: {
     && latestFreshGreptileThreadAtMs > latestGreptileScoreEntryAtMs
   const hasFreshGreptileFeedback = activeGreptileScore !== null
     || hasFreshGreptileThreadFeedback
+  const promptHumanThreads = hasFreshGreptileFeedback ? humanThreads : freshHumanThreads
   const promptGreptileComments = hasFreshGreptileFeedback
     ? includeLatestGreptileScoreComment(greptileComments, freshGreptileScoreEntry, activeGreptileScore)
     : []
   const promptGreptileReviews = hasFreshGreptileFeedback
     ? includeLatestGreptileScoreReview(greptileReviews, freshGreptileScoreEntry, activeGreptileScore)
     : []
-  const promptGreptileThreads = hasFreshGreptileFeedback ? greptileThreads : []
+  const promptGreptileThreads = hasFreshGreptileFeedback ? freshGreptileThreads : []
   const activeGreptileScoreForPrompt = hasFreshGreptileFeedback ? activeGreptileScore : null
   const freshPromptGreptileThreadTimestampsMs = hasFreshGreptileFeedback ? freshGreptileThreadTimestampsMs : []
 
@@ -141,7 +144,7 @@ export const buildPullRequestReviewPromptInput = (options: {
       greptileThreads: promptGreptileThreads,
       humanComments,
       humanReviews,
-      humanThreads,
+      humanThreads: promptHumanThreads,
       reviewScore: activeGreptileScoreForPrompt,
     }),
     latestFeedbackAtMs,
@@ -243,12 +246,28 @@ const getFreshThreadTimestampsMs = (
   source?: ReviewFeedbackSource,
 ) =>
   threads.flatMap((thread) => {
-    const latest = thread.comments
-      .filter((comment) => (source === undefined || comment.source === source) && getEntryActivityAtMs(comment) > since)
-      .map(getEntryActivityAtMs)
+    const latest = findLatestFreshThreadActivityAtMs(thread, since, source)
 
-    return latest.length === 0 ? [] : [Math.max(...latest)]
+    return latest === null ? [] : [latest]
   })
+
+const filterFreshThreads = (
+  threads: ReadonlyArray<ReviewFeedbackThread>,
+  since: number,
+  source?: ReviewFeedbackSource,
+) =>
+  threads.filter((thread) => findLatestFreshThreadActivityAtMs(thread, since, source) !== null)
+
+const findLatestFreshThreadActivityAtMs = (
+  thread: ReviewFeedbackThread,
+  since: number,
+  source?: ReviewFeedbackSource,
+) =>
+  findLatestNumber(
+    thread.comments
+      .filter((comment) => (source === undefined || comment.source === source) && getEntryActivityAtMs(comment) > since)
+      .map(getEntryActivityAtMs),
+  )
 
 const renderPullRequestReviewMarkdown = (options: {
   readonly greptileComments: ReadonlyArray<ReviewFeedbackComment>
