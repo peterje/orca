@@ -117,9 +117,9 @@ const main = async () => {
       await rm(controlFile, { force: true })
     } finally {
       try {
-        await disposeRuntimeOnce()
-      } finally {
         await server.stop(true)
+      } finally {
+        await disposeRuntimeOnce()
       }
     }
   }
