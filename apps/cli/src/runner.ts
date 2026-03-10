@@ -339,14 +339,14 @@ const runImplementation = (options: {
       Effect.mapError((cause) => (cause instanceof RunStateBusyError ? cause : toRunnerFailure(cause))),
     )
 
-    yield* publishOrcaEvent({
-      issueIdentifier: options.issue.identifier,
-      issueTitle: options.issue.title,
-      mode: "implementation",
-      type: "run-started",
-    })
-
     return yield* Effect.gen(function* () {
+      yield* publishOrcaEvent({
+        issueIdentifier: options.issue.identifier,
+        issueTitle: options.issue.title,
+        mode: "implementation",
+        type: "run-started",
+      })
+
       yield* announceRunStage({
         issueIdentifier: options.issue.identifier,
         issueTitle: options.issue.title,
@@ -505,14 +505,14 @@ const runMaintenance = (options: {
       Effect.mapError((cause) => (cause instanceof RunStateBusyError ? cause : toRunnerFailure(cause))),
     )
 
-    yield* publishOrcaEvent({
-      issueIdentifier: options.pullRequest.issueIdentifier,
-      issueTitle: options.pullRequest.issueTitle,
-      mode: "maintenance",
-      type: "run-started",
-    })
-
     return yield* Effect.gen(function* () {
+      yield* publishOrcaEvent({
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        mode: "maintenance",
+        type: "run-started",
+      })
+
       yield* announceRunStage({
         issueIdentifier: options.pullRequest.issueIdentifier,
         issueTitle: options.pullRequest.issueTitle,
@@ -686,14 +686,14 @@ const runReview = (options: {
       Effect.mapError((cause) => (cause instanceof RunStateBusyError ? cause : toRunnerFailure(cause))),
     )
 
-    yield* publishOrcaEvent({
-      issueIdentifier: options.review.pullRequest.issueIdentifier,
-      issueTitle: options.review.pullRequest.issueTitle,
-      mode: "review",
-      type: "run-started",
-    })
-
     return yield* Effect.gen(function* () {
+      yield* publishOrcaEvent({
+        issueIdentifier: options.review.pullRequest.issueIdentifier,
+        issueTitle: options.review.pullRequest.issueTitle,
+        mode: "review",
+        type: "run-started",
+      })
+
       yield* announceRunStage({
         issueIdentifier: options.review.pullRequest.issueIdentifier,
         issueTitle: options.review.pullRequest.issueTitle,

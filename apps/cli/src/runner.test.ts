@@ -1334,6 +1334,58 @@ describe("Runner", () => {
     )
   })
 
+  it.effect("publishes a run-failed event when implementation work is interrupted while publishing run-started", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const exit = yield* runner.runNext.pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+        }
+
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            mode: "implementation",
+            type: "run-started",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            message: "Run was interrupted.",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Run was interrupted.",
+              `- Worktree: ${join(tempDirectory, "worktree")}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issueComments,
+        orcaEventsPublish: (event) =>
+          Effect.gen(function* () {
+            publishedEvents.push(event)
+            if (event.type === "run-started") {
+              yield* Effect.interrupt
+            }
+          }),
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
   it.effect("reports additional parallel failure causes when implementation work fails", () => {
     const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
     const publishedEvents: Array<OrcaServerEvent> = []
@@ -1556,6 +1608,7 @@ const makeRunnerLayer = (options: {
   }>
   readonly issues?: ReadonlyArray<LinearIssue>
   readonly issueComments?: Array<{ readonly body: string; readonly issueId: string }>
+  readonly orcaEventsPublish?: (event: OrcaServerEvent) => Effect.Effect<void>
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
   readonly publishedEvents?: Array<OrcaServerEvent>
   readonly removedPullRequests?: Array<string>
@@ -1628,18 +1681,18 @@ const makeRunnerLayer = (options: {
   const reviewPromptRequests = options.reviewPromptRequests ?? []
   const requestedReviews = options.requestedReviews ?? []
   const storedPullRequests = options.storedPullRequests ?? []
-  const issueComments = options.issueComments ?? []
+  const issueComments = options.issueComments
   let trackedPullRequests = [...(options.trackedPullRequests ?? [])]
   let activeRun: ActiveRun | null = null
-  const orcaEventsLayer = options.publishedEvents === undefined
+  const orcaEventsLayer = options.publishedEvents === undefined && options.orcaEventsPublish === undefined
     ? Layer.empty
     : Layer.succeed(
         OrcaEvents,
         OrcaEvents.of({
-          publish: (event) =>
+          publish: options.orcaEventsPublish ?? ((event) =>
             Effect.sync(() => {
               options.publishedEvents?.push(event)
-            }),
+            })),
           stream: Stream.empty,
         }),
       )
@@ -1712,7 +1765,7 @@ const makeRunnerLayer = (options: {
             commentOnIssue: (request) =>
               Effect.sync(() => {
                 linearComments.push(request)
-                if (linearComments !== issueComments) {
+                if (issueComments !== undefined) {
                   issueComments.push(request)
                 }
               }),
