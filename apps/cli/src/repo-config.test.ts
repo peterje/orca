@@ -233,6 +233,33 @@ describe("RepoConfig", () => {
         expect(workflow.config.raw.verify).toEqual(["bun run check\n bun run test"])
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
+
+  it.effect("strips inline yaml comments without touching quoted values", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: [
+            "agent: opencode # keep the default agent",
+            "agent-timeout-minutes: 45 # default timeout",
+            "draft-pr: false # open a ready review",
+            'linear-label: "Orca # triage" # keep the hash in the value',
+            'verify: ["bun run check", "bun run test"] # required checks',
+            "repo: owner/name # fixture repo",
+          ].join("\n"),
+          prompt: "Inline comments should parse",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const workflow = yield* repoConfig.document
+        const config = yield* repoConfig.read
+
+        expect(config.agent).toBe("opencode")
+        expect(config.agentTimeoutMinutes).toBe(45)
+        expect(config.draftPr).toBe(false)
+        expect(config.verify).toEqual(["bun run check", "bun run test"])
+        expect(workflow.config.raw["linear-label"]).toBe("Orca # triage")
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
 })
 
 const withTempCwd = <A, E, R>(use: (tempDirectory: string) => Effect.Effect<A, E, R>) =>

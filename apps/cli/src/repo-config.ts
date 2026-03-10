@@ -633,7 +633,7 @@ const parseYamlObject = (
       throw new Error(`yaml keys must not be blank at line ${nextContentLineIndex + 1}`)
     }
 
-    const remainder = content.slice(separatorIndex + 1).trim()
+    const remainder = stripInlineYamlComment(content.slice(separatorIndex + 1).trim())
     if (remainder.length > 0) {
       value[key] = parseYamlScalar(remainder)
       lineIndex = nextContentLineIndex + 1
@@ -684,7 +684,7 @@ const parseYamlArray = (
       return { value, nextLineIndex: nextContentLineIndex }
     }
 
-    const remainder = content.slice(2).trim()
+    const remainder = stripInlineYamlComment(content.slice(2).trim())
     if (remainder.length > 0) {
       value.push(parseYamlScalar(remainder))
       lineIndex = nextContentLineIndex + 1
@@ -738,6 +738,51 @@ const parseYamlDoubleQuotedString = (raw: string) => {
   } catch (cause) {
     throw new Error(`invalid double-quoted yaml string: ${String(cause)}`)
   }
+}
+
+const stripInlineYamlComment = (raw: string) => {
+  let inDoubleQuotes = false
+  let inSingleQuotes = false
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index]!
+
+    if (inDoubleQuotes) {
+      if (character === "\\") {
+        index += 1
+        continue
+      }
+      if (character === '"') {
+        inDoubleQuotes = false
+      }
+      continue
+    }
+
+    if (inSingleQuotes) {
+      if (character === "'") {
+        if (raw[index + 1] === "'") {
+          index += 1
+          continue
+        }
+        inSingleQuotes = false
+      }
+      continue
+    }
+
+    if (character === '"') {
+      inDoubleQuotes = true
+      continue
+    }
+    if (character === "'") {
+      inSingleQuotes = true
+      continue
+    }
+    if (character === "#" && (index === 0 || /\s/.test(raw[index - 1] ?? ""))) {
+      return raw.slice(0, index).trimEnd()
+    }
+  }
+
+  return raw
 }
 
 const parseYamlFlowArray = (raw: string): Array<unknown> => {
