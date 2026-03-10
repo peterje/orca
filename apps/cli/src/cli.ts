@@ -30,7 +30,10 @@ const program = Command.run(
   },
 )
 
-const appLayer = Layer.mergeAll(PlatformServices, RepoConfigLayer, OrcaClientLayer.pipe(Layer.provide(RepoConfigLayer)))
+const appLayer = Layer.mergeAll(
+  PlatformServices,
+  OrcaClientLayer.pipe(Layer.provideMerge(RepoConfigLayer)),
+)
 
 const provided = Effect.provide(program, appLayer)
 

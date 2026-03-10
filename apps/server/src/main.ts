@@ -77,29 +77,38 @@ const main = async () => {
     port: 0,
   })
 
+  let controlFile: string | null = null
+
+  const cleanup = async () => {
+    if (cleanedUp) {
+      return
+    }
+
+    cleanedUp = true
+    shuttingDown = true
+
+    try {
+      if (controlFile !== null) {
+        await rm(controlFile, { force: true })
+      }
+    } finally {
+      try {
+        await disposeRuntimeOnce()
+      } finally {
+        await server.stop(true)
+      }
+    }
+  }
+
+  startupCleanup = cleanup
+
   const control = new OrcaServerControlData({
     baseUrl: `http://${server.hostname}:${server.port}`,
     pid: process.pid,
     startedAtMs,
     token,
   })
-  const controlFile = await runtime.runPromise(resolveOrcaDirectory().pipe(Effect.map((orcaDirectory) => `${orcaDirectory}/server.json`)))
-
-  const cleanup = async () => {
-    if (cleanedUp) {
-      return
-    }
-    cleanedUp = true
-    shuttingDown = true
-    try {
-      await disposeRuntimeOnce()
-    } finally {
-      await server.stop(true)
-      await rm(controlFile, { force: true })
-    }
-  }
-
-  startupCleanup = cleanup
+  controlFile = await runtime.runPromise(resolveOrcaDirectory().pipe(Effect.map((orcaDirectory) => `${orcaDirectory}/server.json`)))
 
   await runtime.runPromise(writeServerControl(control))
 
