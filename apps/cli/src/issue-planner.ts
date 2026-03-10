@@ -1,4 +1,5 @@
-import type { LinearIssue } from "./linear.ts"
+import { Schema } from "effect"
+import { LinearIssueData, type LinearIssue } from "./linear.ts"
 
 export type BlockingRelation = {
   readonly issue: LinearIssue
@@ -13,11 +14,34 @@ export type PlannedIssue = LinearIssue & {
   readonly inheritedFrom: ReadonlyArray<string>
 }
 
+const blockingRelationKinds = ["dependency", "subissue"] as const
+const includedBecauseKinds = ["direct", "inherited"] as const
+
+export const BlockingRelationData = Schema.Struct({
+  issue: LinearIssueData,
+  kind: Schema.Literals(blockingRelationKinds),
+})
+
+export const PlannedIssueData = Schema.Struct({
+  ...LinearIssueData.fields,
+  blocking: Schema.Array(BlockingRelationData),
+  blockingIssues: Schema.Array(LinearIssueData),
+  effectivePriority: Schema.Number,
+  includedBecause: Schema.Literals(includedBecauseKinds),
+  inheritedFrom: Schema.Array(Schema.String),
+})
+
 export type IssuePlan = {
   readonly actionable: ReadonlyArray<PlannedIssue>
   readonly blocked: ReadonlyArray<PlannedIssue>
   readonly work: ReadonlyArray<PlannedIssue>
 }
+
+export const IssuePlanData = Schema.Struct({
+  actionable: Schema.Array(PlannedIssueData),
+  blocked: Schema.Array(PlannedIssueData),
+  work: Schema.Array(PlannedIssueData),
+})
 
 export const planIssues = (
   issues: ReadonlyArray<LinearIssue>,

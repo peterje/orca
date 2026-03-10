@@ -1,15 +1,17 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, FileSystem, Layer, Option } from "effect"
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Stream } from "effect"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AgentRunner } from "./agent-runner.ts"
-import { GitHub, type PullRequestFeedback, type PullRequestInfo } from "./github.ts"
-import { Linear, type LinearIssue } from "./linear.ts"
+import { GitHub, type GitHubService, type PullRequestFeedback, type PullRequestInfo } from "./github.ts"
+import { Linear, type LinearIssue, type LinearService } from "./linear.ts"
+import { OrcaEvents } from "./orca-events.ts"
+import type { OrcaServerEvent } from "./orca-server-protocol.ts"
 import { PromptGen } from "./prompt-gen.ts"
 import { PullRequestStore, OrcaManagedPullRequest } from "./pull-request-store.ts"
-import { RepoConfig, RepoConfigData } from "./repo-config.ts"
-import { Runner, RunnerLayer } from "./runner.ts"
+import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
+import { Runner, RunnerFailure, RunnerLayer, reportFailureCause } from "./runner.ts"
 import { RunState, RunStateBusyError, type ActiveRun } from "./run-state.ts"
 import { Verifier } from "./verifier.ts"
 import { Worktree, type ManagedWorktree } from "./worktree.ts"
@@ -1225,6 +1227,379 @@ describe("Runner", () => {
         worktreeDirectory: join(tempDirectory, "worktree"),
       }))),
     ))
+
+  it.effect("publishes a run-failed event when implementation work defects after start", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const exit = yield* runner.runNext.pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasDies(exit.cause)).toBe(true)
+        }
+
+        expect(publishedEvents).toEqual([
+          {
+            initialStage: "implementing",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            mode: "implementation",
+            type: "run-started",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            stage: "implementing",
+            type: "run-stage-changed",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            message: "Agent exploded",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Agent exploded",
+              `- Worktree: ${join(tempDirectory, "worktree")}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        agentRunnerRun: () => Effect.die(new Error("Agent exploded")),
+        issueComments,
+        publishedEvents,
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
+  it.effect("publishes a run-failed event when implementation work is interrupted after start", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const exit = yield* runner.runNext.pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+        }
+
+        expect(publishedEvents).toEqual([
+          {
+            initialStage: "implementing",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            mode: "implementation",
+            type: "run-started",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            stage: "implementing",
+            type: "run-stage-changed",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            message: "Run was interrupted.",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Run was interrupted.",
+              `- Worktree: ${join(tempDirectory, "worktree")}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        agentRunnerRun: () => Effect.interrupt,
+        issueComments,
+        publishedEvents,
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
+  it.effect("publishes a run-failed event when implementation work is interrupted while publishing run-started", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const exit = yield* runner.runNext.pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+        }
+
+        expect(publishedEvents).toEqual([
+          {
+            initialStage: "implementing",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Example issue",
+            mode: "implementation",
+            type: "run-started",
+          },
+          {
+            issueIdentifier: "ENG-1",
+            message: "Run was interrupted.",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Run was interrupted.",
+              `- Worktree: ${join(tempDirectory, "worktree")}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issueComments,
+        orcaEventsPublish: (event) =>
+          Effect.gen(function* () {
+            publishedEvents.push(event)
+            if (event.type === "run-started") {
+              yield* Effect.interrupt
+            }
+          }),
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
+  it.effect("reports additional parallel failure causes when implementation work fails", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+    const worktreeDirectory = "/tmp/orca-worktree"
+
+    const github = {
+      viewCurrentPullRequest: () => Effect.succeed(Option.none()),
+    } as unknown as GitHubService
+
+    const linear = {
+      commentOnIssue: (request: { readonly body: string; readonly issueId: string }) =>
+        Effect.sync(() => {
+          issueComments.push(request)
+        }),
+    } as unknown as LinearService
+
+    return reportFailureCause({
+      cause: Cause.fromReasons([
+        Cause.makeFailReason(new RunnerFailure({ message: "Agent failed" })),
+        Cause.makeDieReason(new Error("Cleanup exploded")),
+      ]),
+      github,
+      issue: {
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+      },
+      linear,
+      managedWorktree: {
+        directory: worktreeDirectory,
+      },
+    }).pipe(
+      Effect.provide(Layer.succeed(
+        OrcaEvents,
+        OrcaEvents.of({
+          publish: (event) =>
+            Effect.sync(() => {
+              publishedEvents.push(event)
+            }),
+          stream: Stream.empty,
+        }),
+      )),
+      Effect.andThen(Effect.sync(() => {
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            message: "Agent failed (additional causes: Cleanup exploded)",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Agent failed (additional causes: Cleanup exploded)",
+              `- Worktree: ${worktreeDirectory}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      })),
+    )
+  })
+
+  it.effect("treats tagged runner failures as reportable without relying on instanceof", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+    const worktreeDirectory = "/tmp/orca-worktree"
+
+    const github = {
+      viewCurrentPullRequest: () => Effect.succeed(Option.none()),
+    } as unknown as GitHubService
+
+    const linear = {
+      commentOnIssue: (request: { readonly body: string; readonly issueId: string }) =>
+        Effect.sync(() => {
+          issueComments.push(request)
+        }),
+    } as unknown as LinearService
+
+    return reportFailureCause({
+      cause: Cause.fromReasons([
+        Cause.makeFailReason({
+          _tag: "RunnerFailure",
+          message: "Agent failed from alternate loader",
+        } as RunnerFailure),
+      ]),
+      github,
+      issue: {
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+      },
+      linear,
+      managedWorktree: {
+        directory: worktreeDirectory,
+      },
+    }).pipe(
+      Effect.provide(Layer.succeed(
+        OrcaEvents,
+        OrcaEvents.of({
+          publish: (event) =>
+            Effect.sync(() => {
+              publishedEvents.push(event)
+            }),
+          stream: Stream.empty,
+        }),
+      )),
+      Effect.andThen(Effect.sync(() => {
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            message: "Agent failed from alternate loader",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Agent failed from alternate loader",
+              `- Worktree: ${worktreeDirectory}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      })),
+    )
+  })
+
+  it.effect("publishes run-failed for non-reportable failure causes without commenting", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+
+    const github = {
+      viewCurrentPullRequest: () => Effect.succeed(Option.none()),
+    } as unknown as GitHubService
+
+    const linear = {
+      commentOnIssue: (request: { readonly body: string; readonly issueId: string }) =>
+        Effect.sync(() => {
+          issueComments.push(request)
+        }),
+    } as unknown as LinearService
+
+    return reportFailureCause({
+      cause: Cause.fromReasons([
+        Cause.makeFailReason(new RepoConfigError({ message: "Missing repo config" })),
+      ]),
+      github,
+      issue: {
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+      },
+      linear,
+      managedWorktree: {
+        directory: "/tmp/orca-worktree",
+      },
+    }).pipe(
+      Effect.provide(Layer.succeed(
+        OrcaEvents,
+        OrcaEvents.of({
+          publish: (event) =>
+            Effect.sync(() => {
+              publishedEvents.push(event)
+            }),
+          stream: Stream.empty,
+        }),
+      )),
+      Effect.andThen(Effect.sync(() => {
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            message: "Missing repo config",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([])
+      })),
+    )
+  })
+
+  it.effect("publishes run-completed with worktreeRemoved after successful cleanup", () => {
+    const publishedEvents: Array<OrcaServerEvent> = []
+    const removedWorktrees: Array<string> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const result = yield* runner.runNext
+
+        expect(result).toMatchObject({
+          issueIdentifier: "ENG-1",
+          mode: "implementation",
+          pullRequestUrl: "https://github.com/peterje/orca/pull/42",
+          worktreePath: join(tempDirectory, "worktree"),
+        })
+        expect(removedWorktrees).toEqual([join(tempDirectory, "worktree")])
+        expect(publishedEvents).toContainEqual({
+          result,
+          type: "run-completed",
+          worktreeRemoved: true,
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        config: { cleanupWorktreeOnSuccess: true },
+        publishedEvents,
+        removedWorktrees,
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
 })
 
 const makeRunnerLayer = (options: {
@@ -1234,6 +1609,7 @@ const makeRunnerLayer = (options: {
     readonly prompt: string
     readonly promptFilePath: string
   }>
+  readonly agentRunnerRun?: Parameters<typeof AgentRunner.of>[0]["run"]
   readonly baseSyncMergeExitCode?: number
   readonly createdPullRequests?: Array<{
     readonly baseBranch: string
@@ -1264,8 +1640,12 @@ const makeRunnerLayer = (options: {
     readonly verify: ReadonlyArray<string>
   }>
   readonly issues?: ReadonlyArray<LinearIssue>
+  readonly issueComments?: Array<{ readonly body: string; readonly issueId: string }>
+  readonly orcaEventsPublish?: (event: OrcaServerEvent) => Effect.Effect<void>
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
+  readonly publishedEvents?: Array<OrcaServerEvent>
   readonly removedPullRequests?: Array<string>
+  readonly removedWorktrees?: Array<string>
   readonly readPullRequestFeedbackRequests?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
   readonly readyForReviewRequests?: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }>
   readonly recordedGreptileReviewRequests?: Array<{
@@ -1313,9 +1693,13 @@ const makeRunnerLayer = (options: {
   readonly worktreeDirectory: string
   readonly worktreeStatus?: string
 }) => {
+  const removedWorktrees = options.removedWorktrees ?? []
   const worktree = makeManagedWorktree({
     baseSyncMergeExitCode: options.baseSyncMergeExitCode,
     directory: options.worktreeDirectory,
+    onRemove: (directory) => {
+      removedWorktrees.push(directory)
+    },
     unresolvedConflictFiles: options.unresolvedConflictFiles,
     unresolvedConflictFilesAfterFirstRead: options.unresolvedConflictFilesAfterFirstRead,
     weaveDriver: options.weaveDriver,
@@ -1335,28 +1719,43 @@ const makeRunnerLayer = (options: {
   const reviewPromptRequests = options.reviewPromptRequests ?? []
   const requestedReviews = options.requestedReviews ?? []
   const storedPullRequests = options.storedPullRequests ?? []
+  const issueComments = options.issueComments
   let trackedPullRequests = [...(options.trackedPullRequests ?? [])]
   let activeRun: ActiveRun | null = null
+  const orcaEventsLayer = options.publishedEvents === undefined && options.orcaEventsPublish === undefined
+    ? Layer.empty
+    : Layer.succeed(
+        OrcaEvents,
+        OrcaEvents.of({
+          publish: options.orcaEventsPublish ?? ((event) =>
+            Effect.sync(() => {
+              options.publishedEvents?.push(event)
+            })),
+          stream: Stream.empty,
+        }),
+      )
 
-  return RunnerLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        testFileSystemLayer,
-        Layer.succeed(
+  return Layer.mergeAll(
+    RunnerLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          testFileSystemLayer,
+          Layer.succeed(
           AgentRunner,
           AgentRunner.of({
-            run: (request) =>
-              Effect.sync(() => {
-                agentRunRequests.push({
-                  agent: request.agent,
-                  cwd: request.cwd,
-                  prompt: request.prompt,
-                  promptFilePath: request.promptFilePath,
-                })
-              }),
-          }),
-        ),
-        Layer.succeed(
+            run: options.agentRunnerRun
+              ?? ((request) =>
+                Effect.sync(() => {
+                  agentRunRequests.push({
+                    agent: request.agent,
+                    cwd: request.cwd,
+                    prompt: request.prompt,
+                    promptFilePath: request.promptFilePath,
+                  })
+                })),
+            }),
+          ),
+          Layer.succeed(
           GitHub,
           GitHub.of({
             createPullRequest: (request) =>
@@ -1395,15 +1794,18 @@ const makeRunnerLayer = (options: {
                   ? Option.none()
                   : Option.some(options.currentPullRequest),
               ),
-          }),
-        ),
-        Layer.succeed(
+            }),
+          ),
+          Layer.succeed(
           Linear,
           Linear.of({
             authenticate: Effect.die("not used in this test"),
             commentOnIssue: (request) =>
               Effect.sync(() => {
                 linearComments.push(request)
+                if (issueComments !== undefined) {
+                  issueComments.push(request)
+                }
               }),
             issues: (request) =>
               Effect.succeed(filterIssuesByWorkspace(
@@ -1412,9 +1814,9 @@ const makeRunnerLayer = (options: {
               )),
             markIssueInProgress: () => Effect.void,
             viewer: Effect.die("not used in this test"),
-          }),
-        ),
-        Layer.succeed(
+            }),
+          ),
+          Layer.succeed(
           PromptGen,
           PromptGen.of({
             buildImplementationPrompt: () =>
@@ -1438,9 +1840,9 @@ const makeRunnerLayer = (options: {
                   promptFileContents: "# Pull request review\n\nIdentifier: ENG-1\n",
                 }
               }),
-          }),
-        ),
-        Layer.succeed(
+            }),
+          ),
+          Layer.succeed(
           PullRequestStore,
           PullRequestStore.of({
             list: Effect.sync(() => trackedPullRequests),
@@ -1518,9 +1920,9 @@ const makeRunnerLayer = (options: {
                 ]
                 return created
               }),
-          }),
-        ),
-        Layer.succeed(
+            }),
+          ),
+          Layer.succeed(
           RepoConfig,
           RepoConfig.of({
             bootstrap: () => Effect.die("not used in this test"),
@@ -1546,9 +1948,9 @@ const makeRunnerLayer = (options: {
             })),
             readOption: Effect.die("not used in this test"),
             write: () => Effect.die("not used in this test"),
-          }),
-        ),
-        Layer.succeed(
+            }),
+          ),
+          Layer.succeed(
           RunState,
           RunState.of({
             acquire: options.runStateAcquire ?? ((run) => Effect.sync(() => {
@@ -1576,9 +1978,9 @@ const makeRunnerLayer = (options: {
                 } as ActiveRun
                 return activeRun
               }),
-          }),
-        ),
-        Layer.succeed(
+            }),
+          ),
+          Layer.succeed(
           Verifier,
           Verifier.of({
             run: () => Effect.succeed([]),
@@ -1589,10 +1991,12 @@ const makeRunnerLayer = (options: {
           Worktree.of({
             create: () => Effect.succeed(worktree),
             resume: () => Effect.succeed(worktree),
-          }),
+            }),
+          ),
         ),
       ),
     ),
+    orcaEventsLayer,
   )
 }
 
@@ -1662,6 +2066,7 @@ const reviewComment = (overrides?: Partial<PullRequestFeedback["reviewThreads"][
 const makeManagedWorktree = (options: {
   readonly baseSyncMergeExitCode?: number | undefined
   readonly directory: string
+  readonly onRemove?: ((directory: string) => void) | undefined
   readonly unresolvedConflictFiles?: ReadonlyArray<string> | undefined
   readonly unresolvedConflictFilesAfterFirstRead?: ReadonlyArray<string> | undefined
   readonly weaveDriver?: string | null | undefined
@@ -1674,7 +2079,9 @@ const makeManagedWorktree = (options: {
   return {
     branch: "orca/eng-1-example-issue",
     directory: options.directory,
-    remove: Effect.void,
+    remove: Effect.sync(() => {
+      options.onRemove?.(options.directory)
+    }),
     run: (command) =>
       Effect.sync(() => {
         options.worktreeCommandLog?.push(command)

@@ -21,6 +21,18 @@
         "@types/bun": "^1.3.8",
       },
     },
+    "apps/server": {
+      "name": "@orca/server",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-bun": "4.0.0-beta.29",
+        "@orca/cli": "workspace:*",
+        "effect": "4.0.0-beta.29",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.8",
+      },
+    },
   },
   "packages": {
     "@effect/platform-bun": ["@effect/platform-bun@4.0.0-beta.29", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.29" }, "peerDependencies": { "effect": "^4.0.0-beta.29" } }, "sha512-Yd7VTbbRjqkfrYu63bJbg/4w4sax8By6y9FHrbkZ9hCpDxF+Imcg3cMeoUcRlwgd4elyn+cSPFWS9CGh3eYqRw=="],
@@ -96,6 +108,8 @@
     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3", "", { "os": "win32", "cpu": "x64" }, "sha512-x0fWaQtYp4E6sktbsdAqnehxDgEc/VwM7uLsRCYWaiGu0ykYdZPiS8zCWdnjHwyiumousxfBm4SO31eXqwEZhQ=="],
 
     "@orca/cli": ["@orca/cli@workspace:apps/cli"],
+
+    "@orca/server": ["@orca/server@workspace:apps/server"],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.59.0", "", { "os": "android", "cpu": "arm" }, "sha512-upnNBkA6ZH2VKGcBj9Fyl9IGNPULcjXRlg0LLeaioQWueH30p6IXtJEbKAgvyv+mJaMxSm1l6xwDXYjpEMiLMg=="],
 

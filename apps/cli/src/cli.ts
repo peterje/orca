@@ -11,23 +11,17 @@ import { commandRun } from "./commands/run.ts"
 import { commandRoot } from "./commands/root.ts"
 import { commandServe } from "./commands/serve.ts"
 import { commandStatus } from "./commands/status.ts"
-import { AgentRunnerLayer } from "./agent-runner.ts"
-import { GitHubLayer } from "./github.ts"
 import { LinearApiError } from "./linear.ts"
-import { LinearLayer } from "./linear-layer.ts"
 import {
   LinearAuthRequiredError,
   LinearOAuthError,
 } from "./linear/token-manager.ts"
-import { PromptGenLayer } from "./prompt-gen.ts"
-import { PullRequestStoreLayer } from "./pull-request-store.ts"
-import { MissionControlError, MissionControlLayer } from "./mission-control.ts"
+import { MissionControlError } from "./mission-control.ts"
+import { OrcaClientError, OrcaClientLayer } from "./orca-client.ts"
 import { RepoConfigError, RepoConfigLayer } from "./repo-config.ts"
-import { RunnerFailure, RunnerLayer, RunnerNoWorkError } from "./runner.ts"
-import { RunStateBusyError, RunStateLayer } from "./run-state.ts"
+import { RunnerFailure, RunnerNoWorkError } from "./runner.ts"
+import { RunStateBusyError } from "./run-state.ts"
 import { PlatformServices } from "./shared/platform.ts"
-import { VerifierLayer } from "./verifier.ts"
-import { WorktreeLayer } from "./worktree.ts"
 
 const program = Command.run(
   commandRoot.pipe(Command.withSubcommands([commandLinear, commandInit, commandIssues, commandRun, commandServe, commandStatus])),
@@ -36,21 +30,10 @@ const program = Command.run(
   },
 )
 
-const supportLayer = Layer.mergeAll(
-  RepoConfigLayer,
-  RunStateLayer,
-  WorktreeLayer,
-  AgentRunnerLayer,
-  PromptGenLayer,
-  PullRequestStoreLayer,
-  VerifierLayer,
-  GitHubLayer,
-).pipe(Layer.provide(PlatformServices))
-
-const executionLayer = RunnerLayer.pipe(Layer.provide([LinearLayer, supportLayer]))
-const missionControlLayer = MissionControlLayer.pipe(Layer.provide([LinearLayer, supportLayer]))
-
-const appLayer = Layer.mergeAll(PlatformServices, LinearLayer, supportLayer, executionLayer, missionControlLayer)
+const appLayer = Layer.mergeAll(
+  PlatformServices,
+  OrcaClientLayer.pipe(Layer.provideMerge(RepoConfigLayer)),
+)
 
 const provided = Effect.provide(program, appLayer)
 
@@ -59,6 +42,7 @@ const handled = Effect.catchTags(provided, {
   LinearOAuthError: renderAndExit,
   LinearApiError: renderAndExit,
   MissionControlError: renderAndExit,
+  OrcaClientError: renderAndExit,
   RepoConfigError: renderAndExit,
   RunnerFailure: renderAndExit,
   RunnerNoWorkError: renderAndExit,

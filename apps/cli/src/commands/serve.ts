@@ -1,8 +1,7 @@
 import { Console, Duration, Effect, Result } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
-import { MissionControl, renderMissionControl } from "../mission-control.ts"
-import { RunState } from "../run-state.ts"
-import { Runner } from "../runner.ts"
+import { renderMissionControl } from "../mission-control.ts"
+import { OrcaClient } from "../orca-client.ts"
 
 const noWorkHeartbeatEvery = 10
 
@@ -18,19 +17,26 @@ export const commandServe = Command.make(
     ),
   },
   Effect.fn("commandServe")(function* ({ execute, intervalSeconds }) {
-    const missionControl = yield* MissionControl
-    const runner = yield* Runner
+    const client = yield* OrcaClient
     let previousSnapshotKey: string | null = null
     let emptyPolls = 0
 
     while (true) {
-      const runState = yield* RunState
-      const activeRun = yield* runState.current.pipe(Effect.orElseSucceed(() => null))
-      yield* runner.pollWaitingPullRequests.pipe(Effect.orElseSucceed(() => undefined))
-      const snapshot = yield* missionControl.snapshot
-      const snapshotKey = JSON.stringify(snapshot)
-      const shouldHeartbeat = activeRun === null && snapshot.next === null
+      yield* client.pollWaitingPullRequests.pipe(
+        Effect.tapError((error) => Console.log(`Failed to poll waiting pull requests: ${formatErrorMessage(error)}`)),
+        Effect.orElseSucceed(() => undefined),
+      )
+      const snapshot = yield* client.missionControlSnapshot.pipe(
+        Effect.tapError((error) => Console.log(`Failed to load mission control snapshot: ${formatErrorMessage(error)}`)),
+        Effect.orElseSucceed(() => null),
+      )
 
+      if (snapshot === null) {
+        yield* Effect.sleep(Duration.seconds(intervalSeconds))
+        continue
+      }
+
+      const snapshotKey = JSON.stringify(snapshot)
       if (snapshot.current !== null || snapshot.next !== null) {
         emptyPolls = 0
         if (snapshotKey !== previousSnapshotKey) {
@@ -39,22 +45,17 @@ export const commandServe = Command.make(
           }
           previousSnapshotKey = snapshotKey
         }
-        if (execute && activeRun === null && snapshot.next !== null) {
-          const result = yield* runner.runNext.pipe(Effect.result)
+        if (execute && snapshot.current === null && snapshot.next !== null) {
+          const result = yield* client.runNext.pipe(Effect.result)
           yield* Result.match(result, {
-            onFailure: (error) => {
-              const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)
-              return Console.log(`Run failed: ${message}`)
-            },
+            onFailure: (error) => Console.log(`Run failed: ${formatErrorMessage(error)}`),
             onSuccess: (value) =>
               Console.log(`${value.mode === "review" ? "Updated" : "Opened"} PR for ${value.issueIdentifier}: ${value.pullRequestUrl}`),
           })
           previousSnapshotKey = null
         }
       } else {
-        if (shouldHeartbeat) {
-          emptyPolls += 1
-        }
+        emptyPolls += 1
         if (snapshotKey !== previousSnapshotKey || emptyPolls === 1 || emptyPolls % noWorkHeartbeatEvery === 0) {
           for (const line of renderMissionControl(snapshot)) {
             yield* Console.log(line)
@@ -67,3 +68,6 @@ export const commandServe = Command.make(
     }
   }),
 ).pipe(Command.withDescription("Poll Linear and print the next Orca issue."))
+
+const formatErrorMessage = (error: unknown) =>
+  typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)

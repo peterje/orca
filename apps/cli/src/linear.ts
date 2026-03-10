@@ -32,6 +32,31 @@ export type LinearWorkflowState = {
   readonly type: string
 }
 
+export const LinearWorkflowStateData = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  type: Schema.String,
+})
+
+export const LinearIssueData = Schema.Struct({
+  blockedBy: Schema.Array(Schema.String),
+  childIds: Schema.Array(Schema.String),
+  createdAtMs: Schema.Number,
+  description: Schema.String,
+  id: Schema.String,
+  identifier: Schema.String,
+  isOrcaTagged: Schema.Boolean,
+  labels: Schema.Array(Schema.String),
+  parentId: Schema.NullOr(Schema.String),
+  priority: Schema.Number,
+  state: Schema.String,
+  stateId: Schema.String,
+  stateName: Schema.String,
+  teamStates: Schema.Array(LinearWorkflowStateData),
+  title: Schema.String,
+  workspaceSlug: Schema.optional(Schema.String),
+})
+
 export type LinearService = {
   authenticate: Effect.Effect<LinearViewer, LinearApiError | LinearOAuthError>
   commentOnIssue: (options: {
@@ -190,7 +215,7 @@ export const LinearLive = Layer.effect(
   }),
 )
 
-export type LinearViewer = typeof Viewer.Type
+export type LinearViewer = typeof LinearViewerData.Type
 
 export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()(
   "LinearApiError",
@@ -200,21 +225,17 @@ export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()(
   },
 ) {}
 
-const Viewer = Schema.Struct({
+export const LinearViewerData = Schema.Struct({
   email: Schema.String,
   id: Schema.String,
   name: Schema.String,
 })
 
 const ViewerData = Schema.Struct({
-  viewer: Viewer,
+  viewer: LinearViewerData,
 })
 
-const IssueState = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  type: Schema.String,
-})
+const IssueState = LinearWorkflowStateData
 
 const TeamStates = Schema.Struct({
   nodes: Schema.Array(IssueState),

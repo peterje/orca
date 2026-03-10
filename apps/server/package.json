@@ -1,0 +1,14 @@
+{
+  "name": "@orca/server",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "dependencies": {
+    "@orca/cli": "workspace:*",
+    "@effect/platform-bun": "4.0.0-beta.29",
+    "effect": "4.0.0-beta.29"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.8"
+  }
+}

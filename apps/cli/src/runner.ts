@@ -1,4 +1,4 @@
-import { Console, Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
+import { Cause, Console, Data, Effect, FileSystem, Layer, Option, ServiceMap } from "effect"
 import { AgentRunner, AgentRunnerError, AgentRunnerStalledError, AgentRunnerTimeoutError } from "./agent-runner.ts"
 import { GitHub, GitHubError, type GitHubService, type PullRequestInfo } from "./github.ts"
 import { planIssues, type IssuePlan, type PlannedIssue } from "./issue-planner.ts"
@@ -7,10 +7,11 @@ import { PromptGen, PromptGenError } from "./prompt-gen.ts"
 import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
 import { findLatestGreptileReviewScore, type PendingPullRequestReview } from "./review-queue.ts"
-import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
+import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunMode, type ActiveRunStage } from "./run-state.ts"
 import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
 import { Worktree, WorktreeError, makeRemoteBaseRef, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
+import { OrcaEvents } from "./orca-events.ts"
 
 export type RunnerResult = {
   readonly issueIdentifier: string
@@ -339,6 +340,13 @@ const runImplementation = (options: {
     )
 
     return yield* Effect.gen(function* () {
+      yield* publishRunStarted({
+        initialStage: "implementing",
+        issueIdentifier: options.issue.identifier,
+        issueTitle: options.issue.title,
+        mode: "implementation",
+      })
+
       yield* announceRunStage({
         issueIdentifier: options.issue.identifier,
         issueTitle: options.issue.title,
@@ -436,20 +444,26 @@ const runImplementation = (options: {
         issueId: options.issue.id,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      let worktreeRemoved = false
       if (options.config.cleanupWorktreeOnSuccess) {
         yield* managedWorktree.remove.pipe(Effect.mapError(toRunnerFailure))
+        worktreeRemoved = true
       }
 
-      return {
+      const result = {
         issueIdentifier: options.issue.identifier,
         mode: "implementation",
         pullRequestUrl: finalizedPullRequest.pullRequest.url,
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
+
+      yield* publishRunCompleted({ result, worktreeRemoved })
+
+      return result
     }).pipe(
-      Effect.tapError((error) =>
-        reportFailure({
-          error,
+      Effect.tapCause((cause) =>
+        reportFailureCause({
+          cause,
           github: options.github,
           issue: {
             issueId: options.issue.id,
@@ -494,6 +508,13 @@ const runMaintenance = (options: {
     )
 
     return yield* Effect.gen(function* () {
+      yield* publishRunStarted({
+        initialStage: "syncing-with-base",
+        issueIdentifier: options.pullRequest.issueIdentifier,
+        issueTitle: options.pullRequest.issueTitle,
+        mode: "maintenance",
+      })
+
       yield* announceRunStage({
         issueIdentifier: options.pullRequest.issueIdentifier,
         issueTitle: options.pullRequest.issueTitle,
@@ -609,20 +630,26 @@ const runMaintenance = (options: {
         issueId: options.pullRequest.issueId,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      let worktreeRemoved = false
       if (options.config.cleanupWorktreeOnSuccess) {
         yield* managedWorktree.remove.pipe(Effect.mapError(toRunnerFailure))
+        worktreeRemoved = true
       }
 
-      return {
+      const result = {
         issueIdentifier: options.pullRequest.issueIdentifier,
         mode: "maintenance",
         pullRequestUrl: finalizedPullRequest.pullRequest.url,
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
+
+      yield* publishRunCompleted({ result, worktreeRemoved })
+
+      return result
     }).pipe(
-      Effect.tapError((error) =>
-        reportFailure({
-          error,
+      Effect.tapCause((cause) =>
+        reportFailureCause({
+          cause,
           github: options.github,
           issue: options.pullRequest,
           linear: options.linear,
@@ -664,6 +691,13 @@ const runReview = (options: {
     )
 
     return yield* Effect.gen(function* () {
+      yield* publishRunStarted({
+        initialStage: "addressing-review-feedback",
+        issueIdentifier: options.review.pullRequest.issueIdentifier,
+        issueTitle: options.review.pullRequest.issueTitle,
+        mode: "review",
+      })
+
       yield* announceRunStage({
         issueIdentifier: options.review.pullRequest.issueIdentifier,
         issueTitle: options.review.pullRequest.issueTitle,
@@ -757,20 +791,26 @@ const runReview = (options: {
         issueId: options.review.pullRequest.issueId,
       }).pipe(Effect.mapError(toRunnerFailure))
 
+      let worktreeRemoved = false
       if (options.config.cleanupWorktreeOnSuccess) {
         yield* managedWorktree.remove.pipe(Effect.mapError(toRunnerFailure))
+        worktreeRemoved = true
       }
 
-      return {
+      const result = {
         issueIdentifier: options.review.pullRequest.issueIdentifier,
         mode: "review",
         pullRequestUrl: finalizedPullRequest.pullRequest.url,
         worktreePath: managedWorktree.directory,
       } satisfies RunnerResult
+
+      yield* publishRunCompleted({ result, worktreeRemoved })
+
+      return result
     }).pipe(
-      Effect.tapError((error) =>
-        reportFailure({
-          error,
+      Effect.tapCause((cause) =>
+        reportFailureCause({
+          cause,
           github: options.github,
           issue: options.review.pullRequest,
           linear: options.linear,
@@ -800,7 +840,39 @@ const announceRunStage = (options: {
   readonly issueTitle: string
   readonly stage: ActiveRunStage
 }) =>
-  Console.log(`Mission control: ${formatIssueLabel(options.issueIdentifier, options.issueTitle)} - ${formatActiveRunStage(options.stage)}`)
+  Effect.all([
+    Console.log(`Mission control: ${formatIssueLabel(options.issueIdentifier, options.issueTitle)} - ${formatActiveRunStage(options.stage)}`),
+    publishOrcaEvent({
+      issueIdentifier: options.issueIdentifier,
+      issueTitle: options.issueTitle,
+      stage: options.stage,
+      type: "run-stage-changed",
+    }),
+  ]).pipe(Effect.asVoid)
+
+const publishRunStarted = (options: {
+  readonly initialStage: ActiveRunStage
+  readonly issueIdentifier: string
+  readonly issueTitle: string
+  readonly mode: ActiveRunMode
+}) =>
+  publishOrcaEvent({
+    initialStage: options.initialStage,
+    issueIdentifier: options.issueIdentifier,
+    issueTitle: options.issueTitle,
+    mode: options.mode,
+    type: "run-started",
+  })
+
+const publishRunCompleted = (options: {
+  readonly result: RunnerResult
+  readonly worktreeRemoved: boolean
+}) =>
+  publishOrcaEvent({
+    result: options.result,
+    type: "run-completed",
+    worktreeRemoved: options.worktreeRemoved,
+  })
 
 const syncTrackedPullRequestWithBase = (options: {
   readonly baseBranch: string
@@ -940,9 +1012,15 @@ const reportFailure = (options: {
   }
 }) =>
   Effect.gen(function* () {
-    if (options.error instanceof RepoConfigError || options.error instanceof RunStateBusyError || options.error instanceof RunnerNoWorkError) {
+    if (isNonReportableFailure(options.error)) {
       return
     }
+
+    yield* publishOrcaEvent({
+      issueIdentifier: options.issue.issueIdentifier,
+      message: options.error.message,
+      type: "run-failed",
+    })
 
     const existingPr = yield* options.github.viewCurrentPullRequest(options.managedWorktree.directory).pipe(
       Effect.orElseSucceed(() => Option.none<PullRequestInfo>()),
@@ -963,6 +1041,79 @@ const reportFailure = (options: {
       issueId: options.issue.issueId,
     }).pipe(Effect.orElseSucceed(() => undefined))
   })
+
+export const reportFailureCause = (options: {
+  readonly cause: Cause.Cause<RunnerFailure | RepoConfigError | RunStateBusyError | RunnerNoWorkError>
+  readonly github: GitHubService
+  readonly issue: {
+    readonly issueId: string
+    readonly issueIdentifier: string
+  }
+  readonly linear: LinearService
+  readonly managedWorktree: {
+    readonly directory: string
+  }
+}) => {
+  const failures = options.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)
+  const reportableFailures = [
+    ...failures.filter((error): error is RunnerFailure => error._tag === "RunnerFailure"),
+    ...options.cause.reasons.filter(Cause.isDieReason).map((reason) =>
+      new RunnerFailure({
+        cause: reason.defect,
+        message: getErrorMessage(reason.defect),
+      })),
+    ...options.cause.reasons.filter(Cause.isInterruptReason).map((reason) =>
+      new RunnerFailure({
+        cause: reason,
+        message: "Run was interrupted.",
+      })),
+  ]
+
+  const [firstReportableFailure] = reportableFailures
+  if (firstReportableFailure !== undefined) {
+    const error = reportableFailures.length === 1
+      ? firstReportableFailure
+      : new RunnerFailure({
+          cause: options.cause,
+          message: formatFailureMessages(reportableFailures.map((failure) => failure.message)),
+        })
+
+    return reportFailure({
+      error,
+      github: options.github,
+      issue: options.issue,
+      linear: options.linear,
+      managedWorktree: options.managedWorktree,
+    })
+  }
+
+  const [firstFailure] = failures
+  if (firstFailure !== undefined) {
+    return publishOrcaEvent({
+      issueIdentifier: options.issue.issueIdentifier,
+      message: formatFailureMessages(failures.map(getErrorMessage)),
+      type: "run-failed",
+    })
+  }
+
+  return Effect.void
+}
+
+const isNonReportableFailure = (error: RunnerFailure | RepoConfigError | RunStateBusyError | RunnerNoWorkError) =>
+  error._tag === "RepoConfigError" || error._tag === "RunStateBusyError" || error._tag === "RunnerNoWorkError"
+
+const formatFailureMessages = (messages: ReadonlyArray<string>) => {
+  const uniqueMessages = Array.from(new Set(messages.map((message) => message.trim()).filter((message) => message.length > 0)))
+  const [firstMessage, ...additionalMessages] = uniqueMessages
+
+  if (firstMessage === undefined) {
+    return "Run failed."
+  }
+
+  return additionalMessages.length === 0
+    ? firstMessage
+    : `${firstMessage} (additional causes: ${additionalMessages.join("; ")})`
+}
 
 const makeImplementationCommitMessage = (issue: PlannedIssue) =>
   `feat: implement ${issue.identifier.toLowerCase()} ${slugifyIssueTitle(issue.title)}`
@@ -1011,6 +1162,14 @@ const isWaitingForGreptileReview = (
   pullRequest.greptileCompletedAtMs === null && pullRequest.waitingForGreptileReviewSinceMs !== null
 const formatIssueLabel = (issueIdentifier: string, issueTitle: string) =>
   issueTitle.trim().length > 0 ? `${issueIdentifier} ${issueTitle}` : issueIdentifier
+
+const publishOrcaEvent = (event: Parameters<typeof OrcaEvents.Service.publish>[0]) =>
+  Effect.gen(function* () {
+    const orcaEvents = yield* Effect.serviceOption(OrcaEvents)
+    if (Option.isSome(orcaEvents)) {
+      yield* orcaEvents.value.publish(event)
+    }
+  })
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `"'"'`)}'`
 

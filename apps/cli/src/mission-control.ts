@@ -1,11 +1,11 @@
-import { Data, Effect, Layer, ServiceMap } from "effect"
+import { Data, Effect, Layer, Schema, ServiceMap } from "effect"
 import { GitHub, GitHubError } from "./github.ts"
 import { planIssues } from "./issue-planner.ts"
 import { Linear, LinearApiError } from "./linear.ts"
 import { LinearAuthRequiredError } from "./linear/token-manager.ts"
 import { PullRequestStore, PullRequestStoreError } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigError } from "./repo-config.ts"
-import { RunState, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
+import { RunState, RunStateError, activeRunStages, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
 import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 
 export type MissionControlSnapshot = {
@@ -32,6 +32,29 @@ export type MissionControlSnapshot = {
     readonly waitingForReviewCount: number
   }
 }
+
+const queuedMissionControlStages = ["ready-to-pick-up", "review-feedback-ready", "syncing-with-base"] as const
+
+export const MissionControlSnapshotData = Schema.Struct({
+  current: Schema.NullOr(Schema.Struct({
+    issueIdentifier: Schema.String,
+    issueTitle: Schema.String,
+    stage: Schema.Literals(activeRunStages),
+  })),
+  issues: Schema.Struct({
+    blockedCount: Schema.Number,
+    readyToPickUpCount: Schema.Number,
+  }),
+  next: Schema.NullOr(Schema.Struct({
+    issueIdentifier: Schema.String,
+    issueTitle: Schema.String,
+    stage: Schema.Literals(queuedMissionControlStages),
+  })),
+  reviews: Schema.Struct({
+    readyForFollowUpCount: Schema.Number,
+    waitingForReviewCount: Schema.Number,
+  }),
+})
 
 export type MissionControlService = {
   readonly snapshot: Effect.Effect<MissionControlSnapshot, MissionControlError | RepoConfigError | LinearApiError | LinearAuthRequiredError>

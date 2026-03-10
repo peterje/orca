@@ -1,13 +1,14 @@
 import { Console, Effect } from "effect"
 import { Command } from "effect/unstable/cli"
-import { MissionControl, renderMissionControl } from "../mission-control.ts"
+import { renderMissionControl } from "../mission-control.ts"
+import { OrcaClient } from "../orca-client.ts"
 
 export const commandStatus = Command.make(
   "status",
   {},
   Effect.fn("commandStatus")(function* () {
-    const missionControl = yield* MissionControl
-    const snapshot = yield* missionControl.snapshot
+    const client = yield* OrcaClient
+    const snapshot = yield* client.missionControlSnapshot
     for (const line of renderMissionControl(snapshot)) {
       yield* Console.log(line)
     }
