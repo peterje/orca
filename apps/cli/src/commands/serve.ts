@@ -1,8 +1,7 @@
 import { Console, Duration, Effect, Result } from "effect"
 import { Command, Flag } from "effect/unstable/cli"
-import { MissionControl, renderMissionControl } from "../mission-control.ts"
-import { RunState } from "../run-state.ts"
-import { Runner } from "../runner.ts"
+import { renderMissionControl } from "../mission-control.ts"
+import { OrcaClient } from "../orca-client.ts"
 
 const noWorkHeartbeatEvery = 10
 
@@ -18,18 +17,15 @@ export const commandServe = Command.make(
     ),
   },
   Effect.fn("commandServe")(function* ({ execute, intervalSeconds }) {
-    const missionControl = yield* MissionControl
-    const runner = yield* Runner
+    const client = yield* OrcaClient
     let previousSnapshotKey: string | null = null
     let emptyPolls = 0
 
     while (true) {
-      const runState = yield* RunState
-      const activeRun = yield* runState.current.pipe(Effect.orElseSucceed(() => null))
-      yield* runner.pollWaitingPullRequests.pipe(Effect.orElseSucceed(() => undefined))
-      const snapshot = yield* missionControl.snapshot
+      yield* client.pollWaitingPullRequests.pipe(Effect.orElseSucceed(() => undefined))
+      const snapshot = yield* client.missionControlSnapshot
       const snapshotKey = JSON.stringify(snapshot)
-      const shouldHeartbeat = activeRun === null && snapshot.next === null
+      const shouldHeartbeat = snapshot.current === null && snapshot.next === null
 
       if (snapshot.current !== null || snapshot.next !== null) {
         emptyPolls = 0
@@ -39,8 +35,8 @@ export const commandServe = Command.make(
           }
           previousSnapshotKey = snapshotKey
         }
-        if (execute && activeRun === null && snapshot.next !== null) {
-          const result = yield* runner.runNext.pipe(Effect.result)
+        if (execute && snapshot.current === null && snapshot.next !== null) {
+          const result = yield* client.runNext.pipe(Effect.result)
           yield* Result.match(result, {
             onFailure: (error) => {
               const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)

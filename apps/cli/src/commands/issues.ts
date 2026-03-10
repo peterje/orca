@@ -1,18 +1,14 @@
 import { Console, Effect } from "effect"
 import { Command } from "effect/unstable/cli"
-import { formatPriority, planIssues, renderDependencyGraph } from "../issue-planner.ts"
-import { Linear } from "../linear.ts"
-import { RepoConfig } from "../repo-config.ts"
+import { formatPriority, renderDependencyGraph } from "../issue-planner.ts"
+import { OrcaClient } from "../orca-client.ts"
 
 const commandIssuesList = Command.make(
   "list",
   {},
   Effect.fn("commandIssuesList")(function* () {
-    const linear = yield* Linear
-    const repoConfig = yield* RepoConfig
-    const config = yield* repoConfig.readOption
-    const issues = yield* linear.issues({ workspaceSlug: config?.linearWorkspace })
-    const plan = planIssues(issues, { linearLabel: config?.linearLabel })
+    const client = yield* OrcaClient
+    const plan = yield* client.issuePlan
 
     if (plan.work.length === 0) {
       yield* Console.log("No Orca work found.")

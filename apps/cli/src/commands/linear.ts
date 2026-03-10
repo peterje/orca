@@ -1,15 +1,15 @@
 import { Console, Effect } from "effect"
 import { Command } from "effect/unstable/cli"
+import { OrcaClient } from "../orca-client.ts"
 import { resolveOrcaDirectory } from "../orca-directory.ts"
-import { Linear } from "../linear.ts"
 
 const commandLinearAuth = Command.make(
   "auth",
   {},
   Effect.fn("commandLinearAuth")(
     function* () {
-      const linear = yield* Linear
-      const viewer = yield* linear.authenticate
+      const client = yield* OrcaClient
+      const viewer = yield* client.authenticate
       const directory = yield* resolveOrcaDirectory()
 
       yield* Console.log(`Authenticated with Linear as ${viewer.name} <${viewer.email}>.`)

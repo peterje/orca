@@ -7,10 +7,11 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "bun build ./apps/cli/src/cli.ts --outfile ./dist/orca --target bun",
+    "build": "bun build ./apps/cli/src/cli.ts --outfile ./dist/orca --target bun && bun build ./apps/server/src/main.ts --outfile ./dist/orca-server --target bun",
     "check": "bunx tsc --noEmit",
     "test": "bunx vitest run",
-    "orca": "bun run ./apps/cli/src/cli.ts"
+    "orca": "bun run ./apps/cli/src/cli.ts",
+    "orca-server": "bun run ./apps/server/src/main.ts"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-beta.29",

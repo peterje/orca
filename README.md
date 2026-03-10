@@ -4,7 +4,7 @@
   <img src="./docs/orca-mark.svg" alt="Orca navigating work from Linear to GitHub" width="640" />
 </p>
 
-Orca is a Bun + Effect CLI that plans software work from Linear, expands blockers into the queue, and can execute the next actionable issue in an isolated git worktree.
+Orca is a Bun + Effect client/server application. The CLI starts a repo-local server that plans software work from Linear, expands blockers into the queue, and executes the next actionable issue in an isolated git worktree. The server also exposes a streaming event feed for run progress so future clients can follow Orca as it works.
 
 ## Getting started
 
@@ -28,6 +28,8 @@ bun run orca init --repo owner/name --linear-workspace peteredm
 ```
 
 This creates repo-local Orca config in `./.orca/repo.json` and infers verification commands from `package.json`.
+
+The CLI will start a local Orca server on demand and communicate with it for planning, execution, and Linear authentication.
 
 `--linear-workspace` is optional. When set, Orca only considers issues from that Linear workspace slug for `orca issues list`, `orca status`, `orca serve`, and `orca run next`.
 Before Orca starts maintaining tracked pull requests, configure the repo-local weave merge driver:
@@ -102,7 +104,7 @@ In execution mode, Orca fetches the latest `origin/<base-branch>`, creates a git
 - `bun run orca serve` - poll Linear and keep the mission-control snapshot updated
 - `bun run orca run next` - execute the top actionable issue once
 
-You can also build the standalone CLI binary with:
+You can also build the standalone CLI and server binaries with:
 
 ```bash
 bun run build

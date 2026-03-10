@@ -1,0 +1,21 @@
+import { Effect, Layer, PubSub, ServiceMap, Stream } from "effect"
+import type { OrcaServerEvent } from "./orca-server-protocol.ts"
+
+export type OrcaEventsService = {
+  readonly publish: (event: OrcaServerEvent) => Effect.Effect<void>
+  readonly stream: Stream.Stream<OrcaServerEvent>
+}
+
+export const OrcaEvents = ServiceMap.Service<OrcaEventsService>("orca/OrcaEvents")
+
+export const OrcaEventsLayer = Layer.effect(
+  OrcaEvents,
+  Effect.gen(function* () {
+    const pubsub = yield* PubSub.unbounded<OrcaServerEvent>({ replay: 128 })
+
+    return OrcaEvents.of({
+      publish: (event) => PubSub.publish(pubsub, event).pipe(Effect.asVoid),
+      stream: Stream.fromPubSub(pubsub),
+    })
+  }),
+)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, FileSystem, Fiber, Layer, Option, Path, Ref, Stdio, Terminal } from "effect"
+import { Effect, FileSystem, Fiber, Layer, Path, Ref, Stdio, Terminal } from "effect"
 import { Command } from "effect/unstable/cli"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { TestClock, TestConsole } from "effect/testing"
@@ -7,11 +7,13 @@ import { commandIssues } from "./commands/issues.ts"
 import { commandRoot } from "./commands/root.ts"
 import { commandServe } from "./commands/serve.ts"
 import { commandStatus } from "./commands/status.ts"
-import { Linear, type LinearIssue } from "./linear.ts"
-import { MissionControl, type MissionControlSnapshot } from "./mission-control.ts"
-import { RepoConfig, RepoConfigData } from "./repo-config.ts"
+import { type IssuePlan, planIssues } from "./issue-planner.ts"
+import type { LinearIssue } from "./linear.ts"
+import type { MissionControlSnapshot } from "./mission-control.ts"
+import { OrcaClient } from "./orca-client.ts"
+import { RepoConfig } from "./repo-config.ts"
 import { RunState, type ActiveRun } from "./run-state.ts"
-import { Runner, RunnerFailure } from "./runner.ts"
+import { RunnerFailure } from "./runner.ts"
 
 describe("CLI commands", () => {
   it.effect("renders the issues list with actionable and blocked sections", () =>
@@ -36,7 +38,7 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          fixedLinearLayer([
+          fixedPlanClientLayer(planIssues([
             issue({ id: "blocker-1", identifier: "ENG-1", title: "Fix blocker" }),
             issue({
               blockedBy: ["blocker-1"],
@@ -46,7 +48,7 @@ describe("CLI commands", () => {
               priority: 1,
               title: "Ship feature",
             }),
-          ]),
+          ])),
         ),
       ),
     ))
@@ -73,7 +75,7 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          fixedLinearLayer([
+          fixedPlanClientLayer(planIssues([
             issue({
               childIds: ["child-1"],
               id: "parent-1",
@@ -88,7 +90,7 @@ describe("CLI commands", () => {
               parentId: "parent-1",
               title: "Subissue",
             }),
-          ]),
+          ])),
         ),
       ),
     ))
@@ -114,7 +116,7 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          fixedLinearLayer([
+          fixedPlanClientLayer(planIssues([
             issue({
               id: "ready-1",
               identifier: "ENG-1",
@@ -122,7 +124,7 @@ describe("CLI commands", () => {
               priority: 2,
               title: "Ready issue",
             }),
-          ]),
+          ])),
         ),
       ),
     ))
@@ -148,11 +150,16 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          fixedRepoConfigLayer({ linearLabel: "Autowrite", linearWorkspace: "coteachai" }),
-          fixedLinearLayer([
-            issue({ id: "default-1", identifier: "ENG-1", isOrcaTagged: true, title: "Default workspace" }),
-            issue({ id: "custom-1", identifier: "ENG-2", labels: ["Autowrite"], title: "Workspace match", workspaceSlug: "coteachai" }),
-          ]),
+          fixedPlanClientLayer(planIssues(
+            filterIssuesByWorkspace(
+              [
+                issue({ id: "default-1", identifier: "ENG-1", isOrcaTagged: true, title: "Default workspace" }),
+                issue({ id: "custom-1", identifier: "ENG-2", labels: ["Autowrite"], title: "Workspace match", workspaceSlug: "coteachai" }),
+              ],
+              "coteachai",
+            ),
+            { linearLabel: "Autowrite" },
+          )),
         ),
       ),
     ))
@@ -181,7 +188,7 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          fixedLinearLayer([
+          fixedPlanClientLayer(planIssues([
             issue({
               childIds: ["child-1"],
               id: "parent-1",
@@ -202,7 +209,7 @@ describe("CLI commands", () => {
               identifier: "ENG-3",
               title: "Dependency",
             }),
-          ]),
+          ])),
         ),
       ),
     ))
@@ -238,14 +245,13 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          sequencingMissionControlLayer([
+          sequencingSnapshotClientLayer([
             snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
             snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
             snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
             snapshot({}),
             snapshot({}),
           ]),
-          sequencingRunnerLayer([Option.none(), Option.none(), Option.none()]),
         ),
       ),
     ))
@@ -276,7 +282,7 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          sequencingMissionControlLayer([
+          sequencingSnapshotClientLayer([
             snapshot({
               issues: { blockedCount: 0, readyToPickUpCount: 1 },
               next: { issueIdentifier: "ENG-9", issueTitle: "Existing PR", stage: "review-feedback-ready" },
@@ -285,7 +291,6 @@ describe("CLI commands", () => {
             snapshot({ next: { issueIdentifier: "ENG-10", issueTitle: "New issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
             snapshot({ next: { issueIdentifier: "ENG-10", issueTitle: "New issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
           ]),
-          sequencingRunnerLayer([Option.none(), Option.none(), Option.none()]),
         ),
       ),
     ))
@@ -316,13 +321,12 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          sequencingMissionControlLayer([
+          sequencingSnapshotClientLayer(
+            [
             snapshot({ next: { issueIdentifier: "ENG-1", issueTitle: "First issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
             snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
             snapshot({ next: { issueIdentifier: "ENG-2", issueTitle: "Second issue", stage: "ready-to-pick-up" }, issues: { blockedCount: 0, readyToPickUpCount: 1 } }),
-          ]),
-          sequencingRunnerLayer(
-            [Option.none(), Option.none(), Option.none()],
+            ],
             { pollWaitingPullRequests: Effect.fail(new RunnerFailure({ message: "boom" })) },
           ),
         ),
@@ -347,7 +351,7 @@ describe("CLI commands", () => {
         Layer.mergeAll(
           cliEnvironmentLayer,
           TestConsole.layer,
-          fixedMissionControlLayer(snapshot({
+          fixedSnapshotClientLayer(snapshot({
             current: { issueIdentifier: "ENG-11", issueTitle: "Active issue", stage: "verifying" },
             issues: { blockedCount: 1, readyToPickUpCount: 2 },
             next: { issueIdentifier: "ENG-12", issueTitle: "Next issue", stage: "ready-to-pick-up" },
@@ -410,87 +414,48 @@ type TestLinearIssue = LinearIssue & {
   readonly workspaceSlug?: string | undefined
 }
 
-const fixedLinearLayer = (issues: ReadonlyArray<TestLinearIssue>) =>
+const fixedPlanClientLayer = (issuePlan: IssuePlan) =>
   Layer.succeed(
-    Linear,
-    Linear.of({
+    OrcaClient,
+    OrcaClient.of({
       authenticate: Effect.die("not used in this test"),
-      commentOnIssue: () => Effect.die("not used in this test"),
-      issues: (options) => Effect.succeed(filterIssuesByWorkspace(issues, options?.workspaceSlug)),
-      markIssueInProgress: () => Effect.die("not used in this test"),
-      viewer: Effect.die("not used in this test"),
+      issuePlan: Effect.succeed(issuePlan),
+      missionControlSnapshot: Effect.die("not used in this test"),
+      pollWaitingPullRequests: Effect.void,
+      runNext: Effect.die("not used in this test"),
     }),
   )
 
-const sequencingLinearLayer = (snapshots: ReadonlyArray<ReadonlyArray<TestLinearIssue>>) =>
-  Layer.effect(
-    Linear,
-    Effect.gen(function* () {
-      const index = yield* Ref.make(0)
-
-      return Linear.of({
-        authenticate: Effect.die("not used in this test"),
-        commentOnIssue: () => Effect.die("not used in this test"),
-        issues: (options) =>
-          Ref.modify(index, (current) => {
-            const issues = snapshots[Math.min(current, snapshots.length - 1)] ?? []
-            return [filterIssuesByWorkspace(issues, options?.workspaceSlug), current + 1]
-          }),
-        markIssueInProgress: () => Effect.die("not used in this test"),
-        viewer: Effect.die("not used in this test"),
-      })
-    }),
-  )
-
-const fixedRepoConfigLayer = (config: { readonly linearLabel?: string | undefined; readonly linearWorkspace?: string | undefined }) =>
-  Layer.succeed(
-    RepoConfig,
-    RepoConfig.of({
-      bootstrap: () => Effect.die("not used in this test"),
-      configPath: Effect.die("not used in this test"),
-      exists: Effect.die("not used in this test"),
-      read: Effect.succeed(makeRepoConfigData(config)),
-      readOption: Effect.succeed(makeRepoConfigData(config)),
-      write: () => Effect.die("not used in this test"),
-    }),
-  )
-
-const sequencingRunnerLayer = (
-  snapshots: ReadonlyArray<Option.Option<{ readonly id: string; readonly issueIdentifier: string; readonly kind: "implementation"; readonly title: string } | { readonly id: string; readonly issueIdentifier: string; readonly kind: "review"; readonly pullRequestNumber: number; readonly pullRequestUrl: string; readonly title: string }>>,
+const sequencingSnapshotClientLayer = (
+  snapshots: ReadonlyArray<MissionControlSnapshot>,
   options?: {
     readonly pollWaitingPullRequests?: Effect.Effect<void, RunnerFailure>
   },
 ) =>
   Layer.effect(
-    Runner,
+    OrcaClient,
     Effect.gen(function* () {
       const index = yield* Ref.make(0)
 
-      return Runner.of({
-        peekNext: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? Option.none(), current + 1]),
+      return OrcaClient.of({
+        authenticate: Effect.die("not used in this test"),
+        issuePlan: Effect.die("not used in this test"),
+        missionControlSnapshot: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? snapshot({}), current + 1]),
         pollWaitingPullRequests: options?.pollWaitingPullRequests ?? Effect.void,
         runNext: Effect.die("not used in this test"),
       })
     }),
   )
 
-const fixedMissionControlLayer = (mission: MissionControlSnapshot) =>
+const fixedSnapshotClientLayer = (mission: MissionControlSnapshot) =>
   Layer.succeed(
-    MissionControl,
-    MissionControl.of({
-      snapshot: Effect.succeed(mission),
-    }),
-  )
-
-const sequencingMissionControlLayer = (snapshots: ReadonlyArray<MissionControlSnapshot>) =>
-  Layer.effect(
-    MissionControl,
-    Effect.gen(function* () {
-      const index = yield* Ref.make(0)
-
-      return MissionControl.of({
-        snapshot: Ref.modify(index, (current) => [snapshots[Math.min(current, snapshots.length - 1)] ?? snapshot({}), current + 1]),
-      })
+    OrcaClient,
+    OrcaClient.of({
+      authenticate: Effect.die("not used in this test"),
+      issuePlan: Effect.die("not used in this test"),
+      missionControlSnapshot: Effect.succeed(mission),
+      pollWaitingPullRequests: Effect.void,
+      runNext: Effect.die("not used in this test"),
     }),
   )
 
@@ -533,22 +498,3 @@ const filterIssuesByWorkspace = (issues: ReadonlyArray<TestLinearIssue>, workspa
     ? issues
     : issues.filter((issue) => issue.workspaceSlug?.toLowerCase() === normalizedWorkspaceSlug)
 }
-
-const makeRepoConfigData = (overrides: { readonly linearLabel?: string | undefined; readonly linearWorkspace?: string | undefined }) =>
-  new RepoConfigData({
-    agent: "opencode",
-    agentArgs: [],
-    agentTimeoutMinutes: 45,
-    baseBranch: "main",
-    branchPrefix: "orca",
-    cleanupWorktreeOnSuccess: true,
-    draftPr: true,
-    greptilePollIntervalSeconds: 30,
-    linearLabel: overrides.linearLabel ?? "Orca",
-    ...(overrides.linearWorkspace === undefined ? {} : { linearWorkspace: overrides.linearWorkspace }),
-    maxWaitingPullRequests: 4,
-    repo: "peterje/orca",
-    setup: ["bun install"],
-    stallTimeoutMinutes: 10,
-    verify: ["bun run check"],
-  })
