@@ -255,7 +255,7 @@ describe("GitHub", () => {
     )
   })
 
-  it.effect("treats already-ready pull requests as a no-op", () => {
+  it.effect("reads draft state from the api and skips pr-ready when the pull request is already ready", () => {
     const commands: Array<CommandInvocation> = []
 
     return Effect.gen(function* () {
