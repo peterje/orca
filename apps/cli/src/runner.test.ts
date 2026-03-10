@@ -188,7 +188,7 @@ describe("Runner", () => {
       readonly prNumber: number
       readonly repo: string
     }> = []
-    const readyForReviewRequests: Array<{ readonly isDraft?: boolean | undefined; readonly pullRequestNumber: number; readonly repo: string }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
 
     return withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -284,7 +284,7 @@ describe("Runner", () => {
       readonly prNumber: number
       readonly repo: string
     }> = []
-    const readyForReviewRequests: Array<{ readonly isDraft?: boolean | undefined; readonly pullRequestNumber: number; readonly repo: string }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
 
     return withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -342,7 +342,7 @@ describe("Runner", () => {
       readonly prNumber: number
       readonly repo: string
     }> = []
-    const readyForReviewRequests: Array<{ readonly isDraft?: boolean | undefined; readonly pullRequestNumber: number; readonly repo: string }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
 
     return withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -393,7 +393,7 @@ describe("Runner", () => {
   })
 
   it.effect("fails polling when a completed Greptile review cannot be recorded in the store", () => {
-    const readyForReviewRequests: Array<{ readonly isDraft?: boolean | undefined; readonly pullRequestNumber: number; readonly repo: string }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
 
     return withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -537,7 +537,7 @@ describe("Runner", () => {
       readonly repo: string
     }> = []
     const readPullRequestFeedbackRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
-    const readyForReviewRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+    const readyForReviewRequests: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }> = []
 
     return withTempDirectory((tempDirectory) =>
       Effect.gen(function* () {
@@ -551,6 +551,8 @@ describe("Runner", () => {
       }).pipe(Effect.provide(makeRunnerLayer({
         greptileCompletedPullRequests,
         pullRequestFeedbackByKey: {
+          // This stays populated as a regression guard: terminal pull requests should never
+          // read fresh feedback or re-enter the Greptile loop once 5/5 completion is stored.
           "peterje/orca#42": pullRequestFeedback({
             isDraft: false,
             number: 42,
@@ -1263,7 +1265,7 @@ const makeRunnerLayer = (options: {
   readonly pullRequestFeedbackByKey?: Readonly<Record<string, PullRequestFeedback>>
   readonly removedPullRequests?: Array<string>
   readonly readPullRequestFeedbackRequests?: Array<{ readonly pullRequestNumber: number; readonly repo: string }>
-  readonly readyForReviewRequests?: Array<{ readonly isDraft?: boolean | undefined; readonly pullRequestNumber: number; readonly repo: string }>
+  readonly readyForReviewRequests?: Array<{ readonly isDraft: boolean; readonly pullRequestNumber: number; readonly repo: string }>
   readonly recordedGreptileReviewRequests?: Array<{
     readonly lastReviewedAtMs: number
     readonly prNumber: number

@@ -67,7 +67,7 @@ export type GitHubService = {
     readonly repo: string
   }) => Effect.Effect<PullRequestFeedback, GitHubError>
   markPullRequestReadyForReview: (options: {
-    readonly isDraft?: boolean | undefined
+    readonly isDraft: boolean
     readonly pullRequestNumber: number
     readonly repo: string
   }) => Effect.Effect<void, GitHubError>
@@ -213,53 +213,6 @@ export const GitHubLive = Effect.gen(function* () {
             })),
     )
 
-  const readPullRequestDraftState = (options: {
-    readonly pullRequestNumber: number
-    readonly repo: string
-  }) =>
-    ChildProcess.make(
-      "gh",
-      [
-        "pr",
-        "view",
-        String(options.pullRequestNumber),
-        "--repo",
-        options.repo,
-        "--json",
-        "isDraft",
-        "-q",
-        ".isDraft",
-      ],
-      {
-        stderr: "pipe",
-        stdout: "pipe",
-      },
-    ).pipe(
-      spawner.string,
-      Effect.map((value) => value.trim().toLowerCase()),
-      Effect.flatMap((value) => {
-        switch (value) {
-          case "false":
-            return Effect.succeed(false)
-          case "true":
-            return Effect.succeed(true)
-          default:
-            return Effect.fail(
-              new GitHubError({
-                message: `Failed to inspect draft state for pull request #${options.pullRequestNumber}.`,
-              }),
-            )
-        }
-      }),
-      Effect.mapError((cause) =>
-        cause instanceof GitHubError
-          ? cause
-          : new GitHubError({
-              message: `Failed to inspect draft state for pull request #${options.pullRequestNumber}.`,
-              cause,
-            })),
-    )
-
   const readPullRequestFeedback = (options: {
     readonly pullRequestNumber: number
     readonly repo: string
@@ -331,13 +284,12 @@ export const GitHubLive = Effect.gen(function* () {
     )
 
   const markPullRequestReadyForReview = (options: {
-    readonly isDraft?: boolean | undefined
+    readonly isDraft: boolean
     readonly pullRequestNumber: number
     readonly repo: string
   }) =>
     Effect.gen(function* () {
-      const isDraft = options.isDraft ?? (yield* readPullRequestDraftState(options))
-      if (!isDraft) {
+      if (!options.isDraft) {
         return
       }
 

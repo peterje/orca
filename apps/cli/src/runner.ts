@@ -138,6 +138,9 @@ export const RunnerLive = Effect.gen(function* () {
     const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
 
     yield* Effect.forEach(
+      // pollWaitingPullRequests only inspects PRs still waiting on Greptile. Terminal PRs are
+      // pruned by loadTrackedPullRequestQueue during selection so 5/5 successes stay out of the
+      // loop after restart without re-reading already-finished PR feedback on every poll.
       storedPullRequests.filter(isWaitingForGreptileReview),
       (pullRequest) =>
         Effect.gen(function* () {

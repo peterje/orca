@@ -254,38 +254,6 @@ describe("GitHub", () => {
       ),
     )
   })
-
-  it.effect("reads draft state from the api and skips pr-ready when the pull request is already ready", () => {
-    const commands: Array<CommandInvocation> = []
-
-    return Effect.gen(function* () {
-      const github = yield* GitHub
-
-      yield* github.markPullRequestReadyForReview({
-        pullRequestNumber: 42,
-        repo: "peterje/orca",
-      })
-
-      expect(commands.filter((command) => command.args[0] === "pr")).toEqual([
-        {
-          args: ["pr", "view", "42", "--repo", "peterje/orca", "--json", "isDraft", "-q", ".isDraft"],
-          command: "gh",
-        },
-      ])
-    }).pipe(
-      Effect.provide(
-        makeGitHubLayer({
-          onCommand: (command) => {
-            commands.push(command)
-          },
-          stdout: (command) =>
-            command.args[1] === "view"
-              ? "false\n"
-              : "",
-        }),
-      ),
-    )
-  })
 })
 
 type CommandInvocation = {
