@@ -79,19 +79,23 @@ export const OrcaClientLayer = Layer.effect(
         return Option.none<typeof OrcaServerStartupLockData.Type>()
       }
 
-      const json = (() => {
-        try {
-          return JSON.parse(raw)
-        } catch {
-          return null
-        }
-      })()
+      const json = yield* Effect.try({
+        try: () => JSON.parse(raw),
+        catch: (cause) => new OrcaClientError({ message: `Failed to parse ${lockFile}.`, cause }),
+      }).pipe(
+        // Another process may observe the lock file before its first write completes.
+        Effect.orElseSucceed(() => null),
+      )
 
       if (json === null) {
         return Option.none<typeof OrcaServerStartupLockData.Type>()
       }
 
-      const lock = yield* Schema.decodeUnknownEffect(OrcaServerStartupLockData)(json).pipe(Effect.orElseSucceed(() => null))
+      const lock = yield* Schema.decodeUnknownEffect(OrcaServerStartupLockData)(json).pipe(
+        Effect.mapError((cause) => new OrcaClientError({ message: `Invalid Orca server startup lock at ${lockFile}.`, cause })),
+        Effect.orElseSucceed(() => null),
+      )
+
       if (lock === null) {
         return Option.none<typeof OrcaServerStartupLockData.Type>()
       }

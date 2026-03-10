@@ -5,13 +5,13 @@ import { rm } from "node:fs/promises"
 import { Effect, FileSystem, Layer, ManagedRuntime, Schema, Stream } from "effect"
 import { AgentRunnerLayer } from "../../cli/src/agent-runner.ts"
 import { GitHubLayer } from "../../cli/src/github.ts"
-import { planIssues } from "../../cli/src/issue-planner.ts"
+import { IssuePlanData, planIssues } from "../../cli/src/issue-planner.ts"
 import { LinearLayer } from "../../cli/src/linear-layer.ts"
-import { Linear } from "../../cli/src/linear.ts"
-import { MissionControl, MissionControlLayer } from "../../cli/src/mission-control.ts"
+import { Linear, LinearViewerData } from "../../cli/src/linear.ts"
+import { MissionControl, MissionControlLayer, MissionControlSnapshotData } from "../../cli/src/mission-control.ts"
 import { OrcaEvents, OrcaEventsLayer } from "../../cli/src/orca-events.ts"
 import { resolveOrcaDirectory } from "../../cli/src/orca-directory.ts"
-import { OrcaServerControlData, OrcaServerErrorResponse, type OrcaServerEvent } from "../../cli/src/orca-server-protocol.ts"
+import { OrcaServerControlData, OrcaServerErrorResponse, RunnerResultData, type OrcaServerEvent } from "../../cli/src/orca-server-protocol.ts"
 import { PromptGenLayer } from "../../cli/src/prompt-gen.ts"
 import { PullRequestStoreLayer } from "../../cli/src/pull-request-store.ts"
 import { RepoConfig, RepoConfigLayer } from "../../cli/src/repo-config.ts"
@@ -22,6 +22,7 @@ import { VerifierLayer } from "../../cli/src/verifier.ts"
 import { WorktreeLayer } from "../../cli/src/worktree.ts"
 
 type ServerReadyEvent = Extract<OrcaServerEvent, { readonly type: "server-ready" }>
+type EncodableSchema<A> = Schema.Top & { readonly Type: A; readonly EncodingServices: never }
 
 const supportLayer = Layer.mergeAll(
   RepoConfigLayer,
@@ -85,7 +86,7 @@ const main = async () => {
           pollingWaitingPullRequests = false
         })
       },
-      runNextExclusively: (effect) => {
+      runNextExclusively: (effect, schema) => {
         if (runningNext) {
           return Promise.resolve(
             jsonResponse(new OrcaServerErrorResponse({ message: "An Orca run is already active.", tag: "RunStateBusyError" }), 409),
@@ -93,7 +94,7 @@ const main = async () => {
         }
 
         runningNext = true
-        return runJson(effect).finally(() => {
+        return runJson(effect, schema).finally(() => {
           runningNext = false
         })
       },
@@ -149,7 +150,7 @@ const handleRequest = async (
   context: {
     readonly isShuttingDown: () => boolean
     readonly runPollWaitingPullRequests: <E>(effect: Effect.Effect<void, E, AppServices>) => Promise<Response>
-    readonly runNextExclusively: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Promise<Response>
+    readonly runNextExclusively: <A, E>(effect: Effect.Effect<A, E, AppServices>, schema: EncodableSchema<A>) => Promise<Response>
     readonly serverReadyEvent: ServerReadyEvent
     readonly token: string
   },
@@ -175,7 +176,7 @@ const handleRequest = async (
       return runJson(Effect.gen(function* () {
         const linear = yield* Linear
         return yield* linear.authenticate
-      }))
+      }), LinearViewerData)
     case "GET /issues/plan":
       return runJson(
         Effect.gen(function* () {
@@ -185,12 +186,13 @@ const handleRequest = async (
           const issues = yield* linear.issues({ workspaceSlug: config?.linearWorkspace })
           return planIssues(issues, { linearLabel: config?.linearLabel })
         }),
+        IssuePlanData,
       )
     case "GET /mission-control/snapshot":
       return runJson(Effect.gen(function* () {
         const missionControl = yield* MissionControl
         return yield* missionControl.snapshot
-      }))
+      }), MissionControlSnapshotData)
     case "POST /runner/poll-waiting-pull-requests":
       return context.runPollWaitingPullRequests(Effect.gen(function* () {
         const runner = yield* Runner
@@ -200,7 +202,7 @@ const handleRequest = async (
       return context.runNextExclusively(Effect.gen(function* () {
         const runner = yield* Runner
         return yield* runner.runNext
-      }))
+      }), RunnerResultData)
     case "GET /events":
       return openEventStream(request, context.serverReadyEvent)
     default:
@@ -208,10 +210,10 @@ const handleRequest = async (
   }
 }
 
-const runJson = async <A, E>(effect: Effect.Effect<A, E, AppServices>): Promise<Response> => {
+const runJson = async <A, E>(effect: Effect.Effect<A, E, AppServices>, schema: EncodableSchema<A>): Promise<Response> => {
   try {
     const value = await runtime.runPromise(effect)
-    return jsonResponse(value)
+    return jsonResponse(Schema.encodeUnknownSync(schema)(value))
   } catch (error) {
     return errorResponse(error)
   }
