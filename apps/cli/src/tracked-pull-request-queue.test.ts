@@ -222,6 +222,8 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
     reviews: [
       {
         authorLogin: "greptile-apps[bot]",
+        // 5/5 keeps this fixture out of pendingReviews after the queue checks for
+        // fresh review work before it decides whether the PR is still waiting on Greptile.
         body: "Confidence: 5/5",
         createdAtMs: 24,
         id: "review-47",

@@ -171,7 +171,7 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(70)
   })
 
-  it("uses a fresh Greptile reply on a mixed human thread for the reviewed snapshot", () => {
+  it("keeps a fresh Greptile reply on a mixed human thread in the human section", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
         reviewThreads: [
@@ -202,10 +202,12 @@ describe("review queue", () => {
     })
 
     expect(pending).not.toBeNull()
-    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
-    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
     expect(pending?.feedbackMarkdown).toContain("Use the reviewer naming here.")
     expect(pending?.feedbackMarkdown).toContain("I still prefer the bot naming here.")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 4/5")
     expect(pending?.feedbackMarkdown).not.toContain("Please keep the stale bot guidance.")
     expect(pending?.latestFeedbackAtMs).toBe(30)
   })
