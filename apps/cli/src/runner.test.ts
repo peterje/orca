@@ -578,6 +578,7 @@ describe("Runner", () => {
             lastReviewedAtMs: 30,
             prNumber: 42,
             prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 10,
           }),
         ],
         worktreeDirectory: join(tempDirectory, "worktree"),
