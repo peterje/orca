@@ -171,7 +171,7 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(70)
   })
 
-  it("keeps a fresh Greptile reply on a mixed human thread in the human section", () => {
+  it("does not treat a Greptile reply on a mixed thread as fresh human feedback", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
         reviewThreads: [
@@ -201,15 +201,7 @@ describe("review queue", () => {
       pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
     })
 
-    expect(pending).not.toBeNull()
-    expect(pending?.reviewScore).toBeNull()
-    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
-    expect(pending?.feedbackMarkdown).toContain("Use the reviewer naming here.")
-    expect(pending?.feedbackMarkdown).toContain("I still prefer the bot naming here.")
-    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
-    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 4/5")
-    expect(pending?.feedbackMarkdown).not.toContain("Please keep the stale bot guidance.")
-    expect(pending?.latestFeedbackAtMs).toBe(30)
+    expect(pending).toBeNull()
   })
 
   it("does not requeue the same mixed thread while waiting for the next Greptile pass", () => {
@@ -332,6 +324,28 @@ describe("review queue", () => {
     })
 
     expect(pending).toBeNull()
+  })
+
+  it("omits a stale Greptile score when only a later Greptile comment is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [
+          comment({ authorLogin: "reviewer", body: "Keep the human-approved wording.", createdAtMs: 130 }),
+          comment({ authorLogin: "greptile-apps[bot]", body: "Please tighten the helper name.", createdAtMs: 120, id: "comment-2", isBot: true }),
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 80, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 100, waitingForGreptileReviewSinceMs: 110 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("Keep the human-approved wording.")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 3/5")
+    expect(pending?.feedbackMarkdown).not.toContain("Please tighten the helper name.")
+    expect(pending?.latestFeedbackAtMs).toBe(130)
   })
 
   it("uses the latest Greptile review score when deciding whether follow-up work is needed", () => {

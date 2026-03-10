@@ -106,6 +106,36 @@ describe("tracked pull request queue", () => {
       expect(queue.waitingForReviewPullRequests).toEqual([])
     }))
 
+  it.effect("re-enters completed pull requests when human and Greptile feedback both arrive", () =>
+    Effect.gen(function* () {
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileCompletedAtMs: 30,
+              issueId: "issue-9",
+              issueIdentifier: "ENG-9",
+              lastReviewedAtMs: 20,
+              prNumber: 51,
+              prUrl: "https://github.com/peterje/orca/pull/51",
+            }),
+          ]),
+          remove: () => Effect.succeed(false),
+        },
+      })
+
+      expect(queue.pendingReviews.map((review) => review.pullRequest.issueIdentifier)).toEqual(["ENG-9"])
+      expect(queue.pendingReviews[0]?.reviewScore).toEqual({ maximum: 5, value: 4 })
+      expect(queue.waitingForReviewPullRequests).toEqual([])
+    }))
+
   it.effect("prunes terminal pull requests that were closed or merged before reload", () =>
     Effect.gen(function* () {
       const removedPullRequests: Array<string> = []
@@ -248,6 +278,30 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
     ],
     number: 50,
     url: "https://github.com/peterje/orca/pull/50",
+  }),
+  "peterje/orca#51": pullRequestFeedback({
+    comments: [
+      {
+        authorLogin: "reviewer",
+        body: "Keep the reviewer-approved copy.",
+        createdAtMs: 40,
+        id: "comment-51",
+        isBot: false,
+        updatedAtMs: 40,
+      },
+    ],
+    number: 51,
+    reviews: [
+      {
+        authorLogin: "greptile-apps[bot]",
+        body: "Confidence: 4/5",
+        createdAtMs: 45,
+        id: "review-51",
+        isBot: true,
+        updatedAtMs: 45,
+      },
+    ],
+    url: "https://github.com/peterje/orca/pull/51",
   }),
 }
 

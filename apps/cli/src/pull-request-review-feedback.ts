@@ -84,19 +84,17 @@ export const buildPullRequestReviewPromptInput = (options: {
 
   const latestGreptileScoreEntry = findLatestGreptileScoreEntry(options.feedback)
   const latestGreptileScoreEntryAtMs = latestGreptileScoreEntry === null ? 0 : getEntryActivityAtMs(latestGreptileScoreEntry)
-  const reviewScore = latestGreptileScoreEntry === null
-    ? null
-    : parsePendingGreptileReviewScore(latestGreptileScoreEntry.body)
-  const activeGreptileScore = reviewScore !== null && reviewScore.value < reviewScore.maximum ? reviewScore : null
   const freshGreptileScoreEntry = latestGreptileScoreEntryAtMs > options.greptileSince
     ? latestGreptileScoreEntry
     : null
+  const freshGreptileReviewScore = freshGreptileScoreEntry === null
+    ? null
+    : parsePendingGreptileReviewScore(freshGreptileScoreEntry.body)
+  const activeGreptileScore = freshGreptileReviewScore !== null && freshGreptileReviewScore.value < freshGreptileReviewScore.maximum
+    ? freshGreptileReviewScore
+    : null
 
-  // Once an unresolved human thread is in scope, the whole latest thread snapshot counts as
-  // human-scoped feedback for this pass. That intentionally includes later Greptile replies on
-  // the same mixed thread so we can re-open the human section with the latest context without
-  // manufacturing a separate Greptile section that has no standalone Greptile guidance.
-  const freshHumanThreadTimestampsMs = getFreshThreadTimestampsMs(humanThreads, options.humanSince)
+  const freshHumanThreadTimestampsMs = getFreshThreadTimestampsMs(humanThreads, options.humanSince, "human")
   const freshGreptileThreadTimestampsMs = getFreshThreadTimestampsMs(greptileThreads, options.greptileSince)
 
   const hasFreshHumanFeedback = humanComments.length > 0
@@ -129,6 +127,7 @@ export const buildPullRequestReviewPromptInput = (options: {
     ...promptGreptileComments.map(getEntryActivityAtMs),
     ...promptGreptileReviews.map(getEntryActivityAtMs),
     ...freshPromptGreptileThreadTimestampsMs,
+    ...(hasFreshGreptileFeedback && freshGreptileScoreEntry !== null ? [latestGreptileScoreEntryAtMs] : []),
   ])
 
   if (latestFeedbackAtMs === null) {
