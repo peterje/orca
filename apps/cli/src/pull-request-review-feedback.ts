@@ -94,9 +94,12 @@ export const buildPullRequestReviewPromptInput = (options: {
 
   const freshHumanThreadFeedbackAtMs = getFreshThreadActivityAtMs(humanThreads, options.humanSince, "human")
   const freshGreptileThreadFeedbackAtMs = getFreshThreadActivityAtMs(unresolvedThreads, options.greptileSince, "greptile")
-  // Once a human thread is in scope, any fresh reply on that thread should advance the
-  // review watermark so we do not re-queue the same mixed thread on the next poll.
-  const freshHumanThreadWatermarkAtMs = getFreshThreadActivityAtMs(humanThreads, options.humanSince)
+  // Once an unresolved human thread is in scope, the whole latest thread snapshot counts as
+  // reviewed for this pass. That intentionally includes later Greptile replies on the same
+  // mixed thread so we do not immediately re-queue identical feedback while waiting for the
+  // next Greptile round. The thread still stays in the human section on future turns that are
+  // triggered by genuinely new feedback.
+  const freshInScopeHumanThreadActivityAtMs = getFreshThreadActivityAtMs(humanThreads, options.humanSince)
 
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0
@@ -124,7 +127,7 @@ export const buildPullRequestReviewPromptInput = (options: {
   const latestFeedbackAtMs = findLatestNumber([
     ...humanComments.map(getEntryActivityAtMs),
     ...humanReviews.map(getEntryActivityAtMs),
-    ...freshHumanThreadWatermarkAtMs,
+    ...freshInScopeHumanThreadActivityAtMs,
     ...promptGreptileComments.map(getEntryActivityAtMs),
     ...promptGreptileReviews.map(getEntryActivityAtMs),
     ...freshPromptGreptileThreadActivityAtMs,

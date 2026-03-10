@@ -171,7 +171,7 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(70)
   })
 
-  it("tracks fresh Greptile replies on mixed human threads", () => {
+  it("uses a fresh Greptile reply on a mixed human thread for the reviewed snapshot", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
         reviewThreads: [
@@ -208,6 +208,39 @@ describe("review queue", () => {
     expect(pending?.feedbackMarkdown).toContain("I still prefer the bot naming here.")
     expect(pending?.feedbackMarkdown).not.toContain("Please keep the stale bot guidance.")
     expect(pending?.latestFeedbackAtMs).toBe(30)
+  })
+
+  it("does not requeue the same mixed thread while waiting for the next Greptile pass", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({ authorLogin: "reviewer", body: "Use the reviewer naming here.", createdAtMs: 10 }),
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "I still prefer the bot naming here.",
+                createdAtMs: 30,
+                id: "review-comment-2",
+                isBot: true,
+              }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({
+          authorLogin: "greptile-apps[bot]",
+          body: "Confidence: 4/5\n\nPlease keep the stale bot guidance.",
+          createdAtMs: 15,
+          id: "review-2",
+          isBot: true,
+        })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 30, waitingForGreptileReviewSinceMs: 40 }),
+    })
+
+    expect(pending).toBeNull()
   })
 
   it("surfaces the human reply first when Greptile opens a mixed thread", () => {
