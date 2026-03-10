@@ -9,6 +9,7 @@ import {
   defaultMaxWaitingPullRequests,
   defaultWorkflowFileName,
   RepoConfig,
+  RepoConfigData,
   RepoConfigError,
   RepoConfigLayer,
   workflowPathEnvironmentVariable,
@@ -251,6 +252,62 @@ describe("RepoConfig", () => {
       }).pipe(Effect.provide(makeRepoConfigLayer(instrumentedFileSystem)))
     }))
 
+  it.effect("serializes workflow writes against concurrent refreshes", () =>
+    withTempCwd((tempDirectory) => {
+      let activeOperations = 0
+      let maxActiveOperations = 0
+      const writeStarted = makeSignal()
+
+      const instrumentedFileSystem = {
+        ...makeTestFileSystem(),
+        readFileString: (path: string) =>
+          Effect.gen(function* () {
+            activeOperations += 1
+            maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+            const snapshot = readFileSync(path, "utf8")
+            yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 10)))
+            return snapshot
+          }).pipe(
+            Effect.ensuring(Effect.sync(() => {
+              activeOperations -= 1
+            })),
+          ),
+        writeFileString: (path: string, data: string) =>
+          Effect.gen(function* () {
+            activeOperations += 1
+            maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+            writeStarted.resolve()
+            yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 50)))
+            writeFileSync(path, data)
+          }).pipe(
+            Effect.ensuring(Effect.sync(() => {
+              activeOperations -= 1
+            })),
+          ),
+      } as unknown as FileSystem.FileSystem
+
+      return Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: "linear-label: Orca\nrepo: owner/name",
+          prompt: "Concurrent workflow",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const currentConfig = yield* repoConfig.read
+
+        const [, concurrentRead] = yield* Effect.all([
+          repoConfig.write(new RepoConfigData({
+            ...currentConfig,
+            linearLabel: "Autowrite",
+          })),
+          Effect.promise(() => writeStarted.promise).pipe(Effect.flatMap(() => repoConfig.read)),
+        ], { concurrency: "unbounded" })
+
+        expect(concurrentRead.linearLabel).toBe("Autowrite")
+        expect(maxActiveOperations).toBe(1)
+      }).pipe(Effect.provide(makeRepoConfigLayer(instrumentedFileSystem)))
+    }))
+
   it.effect("workflow front matter getters resolve defaults, env indirection, and home-relative paths", () =>
     withEnv(
       {
@@ -362,6 +419,24 @@ const withEnv = <A, E, R>(
         }
       }),
   ).pipe(Effect.flatMap(() => effect))
+
+const makeSignal = () => {
+  let resolved = false
+  let resolvePromise!: () => void
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = () => {
+      if (!resolved) {
+        resolved = true
+        resolve()
+      }
+    }
+  })
+
+  return {
+    promise,
+    resolve: resolvePromise,
+  }
+}
 
 const writeWorkflowFile = (
   path: string,

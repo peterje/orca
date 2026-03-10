@@ -272,24 +272,26 @@ export const RepoConfigLive = Effect.gen(function* () {
       )
       const payload = renderWorkflowDocument(config, promptTemplate)
 
-      yield* fs.makeDirectory(dirname(path), { recursive: true }).pipe(
-        Effect.mapError((cause) => new RepoConfigError({
-          code: "workflow-write-failed",
-          message: `Failed to create ${dirname(path)}.`,
-          cause,
-        })),
-      )
+      yield* refreshSemaphore.withPermit(Effect.gen(function* () {
+        yield* fs.makeDirectory(dirname(path), { recursive: true }).pipe(
+          Effect.mapError((cause) => new RepoConfigError({
+            code: "workflow-write-failed",
+            message: `Failed to create ${dirname(path)}.`,
+            cause,
+          })),
+        )
 
-      yield* fs.writeFileString(path, payload).pipe(
-        Effect.mapError((cause) => new RepoConfigError({
-          code: "workflow-write-failed",
-          message: `Failed to write ${path}.`,
-          cause,
-        })),
-      )
+        yield* fs.writeFileString(path, payload).pipe(
+          Effect.mapError((cause) => new RepoConfigError({
+            code: "workflow-write-failed",
+            message: `Failed to write ${path}.`,
+            cause,
+          })),
+        )
 
-      const state = yield* loadWorkflowState(path, { raw: payload, stamp: makeWorkflowStamp(payload) })
-      yield* Ref.set(cache, state)
+        const state = yield* loadWorkflowState(path, { raw: payload, stamp: makeWorkflowStamp(payload) })
+        yield* Ref.set(cache, state)
+      }))
     })
 
   const bootstrap = (options?: {
