@@ -22,7 +22,7 @@ export type PendingPullRequestReview = {
 
 export type GreptileReviewScore = {
   readonly achieved: number
-  readonly review: PullRequestReview
+  readonly createdAtMs: number
   readonly total: number
 }
 
@@ -42,16 +42,17 @@ export const findPendingPullRequestReview = (options: {
     options.pullRequest.lastReviewedAtMs ?? 0,
     options.pullRequest.waitingForGreptileReviewSinceMs ?? 0,
   )
-  const greptileReviews = options.feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review))
-  const latestGreptileReview = findLatestEntry(greptileReviews)
-  if (latestGreptileReview === null || latestGreptileReview.createdAtMs <= since) {
+  const latestGreptileScoreEntry = findLatestGreptileScoreEntry(options.feedback)
+  if (latestGreptileScoreEntry === null || latestGreptileScoreEntry.createdAtMs <= since) {
     return null
   }
 
-  const reviewScore = parsePendingGreptileReviewScore(latestGreptileReview.body)
+  const reviewScore = parsePendingGreptileReviewScore(latestGreptileScoreEntry.body)
   if (reviewScore === null || reviewScore.value >= reviewScore.maximum) {
     return null
   }
+
+  const greptileReviews = options.feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review))
 
   const unresolvedThreads = options.feedback.reviewThreads
     .map(stripGreptileThreadComments)
@@ -72,7 +73,7 @@ export const findPendingPullRequestReview = (options: {
   }
 
   const latestFeedbackAtMs = Math.max(
-    latestGreptileReview.createdAtMs,
+    latestGreptileScoreEntry.createdAtMs,
     ...recentComments.map((comment) => comment.createdAtMs),
     ...recentReviews.map((review) => review.createdAtMs),
     ...recentUnresolvedThreads.flatMap((thread) => thread.comments.map((comment) => comment.createdAtMs)),
@@ -93,7 +94,7 @@ export const findPendingPullRequestReview = (options: {
 }
 
 export const findLatestGreptileReviewScore = (feedback: PullRequestFeedback): GreptileReviewScore | null => {
-  const latestReview = findLatestEntry(feedback.reviews.filter((review) => review.body.trim().length > 0 && isGreptileEntry(review)))
+  const latestReview = findLatestGreptileScoreEntry(feedback)
 
   if (latestReview === null) {
     return null
@@ -106,7 +107,7 @@ export const findLatestGreptileReviewScore = (feedback: PullRequestFeedback): Gr
 
   return {
     ...score,
-    review: latestReview,
+    createdAtMs: latestReview.createdAtMs,
   }
 }
 
@@ -167,6 +168,14 @@ const renderGreptileReviewMarkdown = (options: {
   return sections.join("\n")
 }
 
+const findLatestGreptileScoreEntry = (feedback: PullRequestFeedback) =>
+  findLatestEntry([
+    ...feedback.comments.filter((comment) =>
+      comment.body.trim().length > 0 && isGreptileEntry(comment) && parseGreptileScore(comment.body) !== null),
+    ...feedback.reviews.filter((review) =>
+      review.body.trim().length > 0 && isGreptileEntry(review) && parseGreptileScore(review.body) !== null),
+  ])
+
 const renderReviewThread = (thread: PullRequestReviewThread) =>
   renderReviewComment(thread.comments[0]!, thread.comments.slice(1))
 
@@ -216,7 +225,7 @@ const parsePendingGreptileReviewScore = (body: string): PendingGreptileReviewSco
   return score === null ? null : { maximum: score.total, value: score.achieved }
 }
 
-const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "review"> | null => {
+const parseGreptileScore = (body: string): Omit<GreptileReviewScore, "createdAtMs"> | null => {
   const match = body.match(/\b(?:confidence|score)\b[^\d]*(\d+)\s*\/\s*(\d+)\b/i)
   if (match === null) {
     return null
