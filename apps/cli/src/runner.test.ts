@@ -320,7 +320,7 @@ describe("Runner", () => {
     )
   })
 
-  it.effect("removes waiting pull requests that were merged or closed outside Orca during polling", () => {
+  it.effect("removes tracked pull requests that were merged or closed outside Orca during polling", () => {
     const removedPullRequests: Array<string> = []
 
     return withTempDirectory((tempDirectory) =>
@@ -329,16 +329,20 @@ describe("Runner", () => {
 
         yield* runner.pollWaitingPullRequests
 
-        expect(removedPullRequests).toEqual(["peterje/orca#41", "peterje/orca#42"])
+        expect(removedPullRequests).toEqual(["peterje/orca#41", "peterje/orca#42", "peterje/orca#43", "peterje/orca#44"])
       }).pipe(Effect.provide(makeRunnerLayer({
         issues: [
           issue({ id: "issue-1", identifier: "ENG-1", isOrcaTagged: true, title: "Closed work" }),
           issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "Merged work" }),
-          issue({ id: "issue-3", identifier: "ENG-3", isOrcaTagged: true, title: "Fresh work" }),
+          issue({ id: "issue-3", identifier: "ENG-3", isOrcaTagged: true, title: "Closed after success" }),
+          issue({ id: "issue-4", identifier: "ENG-4", isOrcaTagged: true, title: "Merged after success" }),
+          issue({ id: "issue-5", identifier: "ENG-5", isOrcaTagged: true, title: "Fresh work" }),
         ],
         pullRequestFeedbackByKey: {
           "peterje/orca#41": pullRequestFeedback({ number: 41, state: "CLOSED", url: "https://github.com/peterje/orca/pull/41" }),
           "peterje/orca#42": pullRequestFeedback({ number: 42, state: "MERGED", url: "https://github.com/peterje/orca/pull/42" }),
+          "peterje/orca#43": pullRequestFeedback({ number: 43, state: "CLOSED", url: "https://github.com/peterje/orca/pull/43" }),
+          "peterje/orca#44": pullRequestFeedback({ number: 44, state: "MERGED", url: "https://github.com/peterje/orca/pull/44" }),
         },
         removedPullRequests,
         trackedPullRequests: [
@@ -357,6 +361,76 @@ describe("Runner", () => {
             prNumber: 42,
             prUrl: "https://github.com/peterje/orca/pull/42",
             waitingForGreptileReviewSinceMs: 2,
+          }),
+          trackedPullRequest({
+            greptileCompletedAtMs: 10,
+            issueId: "issue-3",
+            issueIdentifier: "ENG-3",
+            issueTitle: "Closed after success",
+            lastReviewedAtMs: 9,
+            prNumber: 43,
+            prUrl: "https://github.com/peterje/orca/pull/43",
+          }),
+          trackedPullRequest({
+            greptileCompletedAtMs: 11,
+            issueId: "issue-4",
+            issueIdentifier: "ENG-4",
+            issueTitle: "Merged after success",
+            lastReviewedAtMs: 10,
+            prNumber: 44,
+            prUrl: "https://github.com/peterje/orca/pull/44",
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
+  it.effect("does not re-enter the Greptile loop for terminal open pull requests during polling", () => {
+    const greptileCompletedPullRequests: Array<{
+      readonly completedAtMs: number
+      readonly lastReviewedAtMs: number
+      readonly prNumber: number
+      readonly repo: string
+    }> = []
+    const readyForReviewRequests: Array<{ readonly pullRequestNumber: number; readonly repo: string }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+
+        yield* runner.pollWaitingPullRequests
+
+        expect(readyForReviewRequests).toEqual([])
+        expect(greptileCompletedPullRequests).toEqual([])
+      }).pipe(Effect.provide(makeRunnerLayer({
+        greptileCompletedPullRequests,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            isDraft: false,
+            number: 42,
+            reviews: [
+              {
+                authorLogin: "greptile-apps[bot]",
+                body: "Confidence: 5/5",
+                createdAtMs: 30,
+                id: "review-2",
+                isBot: true,
+              },
+            ],
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        readyForReviewRequests,
+        trackedPullRequests: [
+          trackedPullRequest({
+            greptileCompletedAtMs: 40,
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            lastReviewedAtMs: 30,
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
           }),
         ],
         worktreeDirectory: join(tempDirectory, "worktree"),
