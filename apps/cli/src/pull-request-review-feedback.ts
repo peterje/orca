@@ -53,6 +53,8 @@ type GreptileScoreEntry =
   | ({ readonly kind: "comment" } & PullRequestComment)
   | ({ readonly kind: "review" } & PullRequestReview)
 
+const maxCarriedForwardHumanThreads = 5
+
 export const buildPullRequestReviewPromptInput = (options: {
   readonly feedback: PullRequestFeedback
   readonly greptileSince: number
@@ -162,8 +164,9 @@ export const buildPullRequestReviewPromptInput = (options: {
 
   // Invariant: at least one timestamp source is present whenever fresh feedback exists.
   // The mixed-thread-only Greptile path contributes via freshGreptileHumanThreadTimestampsMs.
-  if (latestFeedbackAtMs === null) {
-    throw new Error("Expected fresh pull request review feedback.")
+  if (latestFeedbackAtMs === null || !Number.isFinite(latestFeedbackAtMs)) {
+    console.warn("Skipping pull request review prompt because the fresh feedback timestamps are invalid.")
+    return null
   }
 
   return {
@@ -255,14 +258,26 @@ const buildPromptHumanThreads = (options: {
       .map(toFreshPromptThread)
   }
 
-  return options.threads.map((thread) => ({
-    freshness:
+  let remainingCarriedForwardThreads = maxCarriedForwardHumanThreads
+
+  return options.threads.flatMap((thread): Array<PromptReviewThread> => {
+    const freshness: PromptReviewThread["freshness"] =
       hasFreshThreadActivity(thread, options.humanSince, "human")
       || hasFreshThreadActivity(thread, options.greptileSince, "greptile")
         ? "fresh"
-        : "carried-forward",
-    thread,
-  }))
+        : "carried-forward"
+
+    if (freshness === "fresh") {
+      return [{ freshness, thread }]
+    }
+
+    if (remainingCarriedForwardThreads === 0) {
+      return []
+    }
+
+    remainingCarriedForwardThreads -= 1
+    return [{ freshness, thread }]
+  })
 }
 
 const includeLatestGreptileScoreComment = (

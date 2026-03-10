@@ -158,6 +158,45 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(120)
   })
 
+  it("limits carried-forward human threads while newer Greptile feedback is active", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          ...Array.from({ length: 7 }, (_, index) => ({
+            comments: [reviewComment({
+              authorLogin: "reviewer",
+              body: `Older human thread ${index + 1}`,
+              createdAtMs: (index + 1) * 10,
+              id: `review-comment-${index + 1}`,
+            })],
+            isCollapsed: false,
+            isResolved: false,
+          })),
+          {
+            comments: [reviewComment({
+              authorLogin: "greptile-apps[bot]",
+              body: "Please keep this helper narrow.",
+              createdAtMs: 85,
+              id: "review-comment-8",
+              isBot: true,
+            })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 90, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 75, waitingForGreptileReviewSinceMs: 80 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown.match(/priority="human" source="human" freshness="carried-forward"/g)).toHaveLength(5)
+    expect(pending?.feedbackMarkdown).toContain("Older human thread 7")
+    expect(pending?.feedbackMarkdown).toContain("Older human thread 3")
+    expect(pending?.feedbackMarkdown).not.toContain("Older human thread 2")
+    expect(pending?.feedbackMarkdown).not.toContain("Older human thread 1")
+  })
+
   it("keeps human feedback that arrived before the latest Greptile request", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
@@ -444,6 +483,28 @@ describe("review queue", () => {
       }),
       pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
+
+    expect(pending).toBeNull()
+  })
+
+  it("returns no pending review when fresh feedback timestamps are invalid", () => {
+    const buildPendingReview = () => findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: Number.POSITIVE_INFINITY })],
+      }),
+      pullRequest: pullRequest(),
+    })
+
+    const originalWarn = console.warn
+    console.warn = () => undefined
+
+    const pending = (() => {
+      try {
+        return buildPendingReview()
+      } finally {
+        console.warn = originalWarn
+      }
+    })()
 
     expect(pending).toBeNull()
   })
