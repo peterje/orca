@@ -16,6 +16,7 @@ describe("tracked pull request queue", () => {
               ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
             ),
         },
+        maxGreptileReviewRequests: 4,
         pullRequestStore: {
           list: Effect.succeed([
             trackedPullRequest({ issueId: "issue-1", issueIdentifier: "ENG-1", prNumber: 41, prUrl: "https://github.com/peterje/orca/pull/41", waitingForGreptileReviewSinceMs: 1 }),
@@ -33,6 +34,7 @@ describe("tracked pull request queue", () => {
 
       expect(removedPullRequests).toEqual(["peterje/orca#41", "peterje/orca#42"])
       expect(queue.openPullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-3", "ENG-4"])
+      expect(queue.exhaustedPullRequests).toEqual([])
       expect(queue.pendingReviews.map((review) => review.pullRequest.issueIdentifier)).toEqual(["ENG-3"])
       expect(queue.pullRequestsNeedingBaseSync).toEqual([])
       expect(queue.waitingForReviewPullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-4"])
@@ -50,6 +52,7 @@ describe("tracked pull request queue", () => {
               ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
             ),
         },
+        maxGreptileReviewRequests: 4,
         pullRequestStore: {
           list: Effect.succeed([
             trackedPullRequest({
@@ -72,6 +75,7 @@ describe("tracked pull request queue", () => {
 
       expect(queue.openPullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-5"])
       expect(queue.pendingReviews).toEqual([])
+      expect(queue.exhaustedPullRequests).toEqual([])
       expect(queue.waitingForReviewPullRequests).toEqual([])
       expect(queue.stalePullRequests).toEqual([])
       expect(removedPullRequests).toEqual([])
@@ -88,6 +92,7 @@ describe("tracked pull request queue", () => {
               ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
             ),
         },
+        maxGreptileReviewRequests: 4,
         pullRequestStore: {
           list: Effect.succeed([
             trackedPullRequest({
@@ -116,6 +121,7 @@ describe("tracked pull request queue", () => {
       })
 
       expect(queue.openPullRequests).toEqual([])
+      expect(queue.exhaustedPullRequests).toEqual([])
       expect(queue.pendingReviews).toEqual([])
       expect(queue.waitingForReviewPullRequests).toEqual([])
       expect(queue.stalePullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-6", "ENG-7"])
@@ -132,6 +138,7 @@ describe("tracked pull request queue", () => {
               ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
             ),
         },
+        maxGreptileReviewRequests: 4,
         pullRequestStore: {
           list: Effect.succeed([
             trackedPullRequest({ issueId: "issue-5", issueIdentifier: "ENG-5", prNumber: 45, prUrl: "https://github.com/peterje/orca/pull/45", waitingForGreptileReviewSinceMs: 5 }),
@@ -142,6 +149,39 @@ describe("tracked pull request queue", () => {
       })
 
       expect(queue.pullRequestsNeedingBaseSync.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-5", "ENG-6"])
+      expect(queue.exhaustedPullRequests).toEqual([])
+      expect(queue.pendingReviews).toEqual([])
+      expect(queue.waitingForReviewPullRequests).toEqual([])
+    }))
+
+  it.effect("keeps exhausted review loops out of follow-up selection", () =>
+    Effect.gen(function* () {
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        maxGreptileReviewRequests: 4,
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileReviewRequestCount: 4,
+              issueId: "issue-8",
+              issueIdentifier: "ENG-8",
+              lastReviewedAtMs: 5,
+              prNumber: 50,
+              prUrl: "https://github.com/peterje/orca/pull/50",
+              waitingForGreptileReviewSinceMs: 3,
+            }),
+          ]),
+          remove: () => Effect.succeed(false),
+        },
+      })
+
+      expect(queue.exhaustedPullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-8"])
       expect(queue.pendingReviews).toEqual([])
       expect(queue.waitingForReviewPullRequests).toEqual([])
     }))
@@ -204,6 +244,30 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
   }),
   "peterje/orca#48": pullRequestFeedback({ number: 48, state: "CLOSED", url: "https://github.com/peterje/orca/pull/48" }),
   "peterje/orca#49": pullRequestFeedback({ number: 49, state: "MERGED", url: "https://github.com/peterje/orca/pull/49" }),
+  "peterje/orca#50": pullRequestFeedback({
+    comments: [
+      {
+        authorLogin: "greptile-apps[bot]",
+        body: "Please narrow the scope.",
+        createdAtMs: 25,
+        id: "comment-50",
+        isBot: true,
+        updatedAtMs: 25,
+      },
+    ],
+    number: 50,
+    reviews: [
+      {
+        authorLogin: "greptile-apps[bot]",
+        body: "Confidence: 4/5",
+        createdAtMs: 24,
+        id: "review-50",
+        isBot: true,
+        updatedAtMs: 24,
+      },
+    ],
+    url: "https://github.com/peterje/orca/pull/50",
+  }),
 }
 
 const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Type> & Pick<typeof OrcaManagedPullRequest.Type, "issueId" | "issueIdentifier" | "prNumber" | "prUrl">) =>
@@ -211,6 +275,8 @@ const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Typ
     branch: overrides.branch ?? `orca/${overrides.issueIdentifier.toLowerCase()}`,
     createdAtMs: overrides.createdAtMs ?? 1,
     greptileCompletedAtMs: overrides.greptileCompletedAtMs ?? null,
+    greptileReviewLimitReachedAtMs: overrides.greptileReviewLimitReachedAtMs ?? null,
+    greptileReviewRequestCount: overrides.greptileReviewRequestCount ?? 1,
     issueDescription: overrides.issueDescription ?? "Example issue description",
     issueId: overrides.issueId,
     issueIdentifier: overrides.issueIdentifier,

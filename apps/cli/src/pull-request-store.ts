@@ -5,6 +5,8 @@ export class OrcaManagedPullRequest extends Schema.Class<OrcaManagedPullRequest>
   branch: Schema.String,
   createdAtMs: Schema.Number,
   greptileCompletedAtMs: Schema.NullOr(Schema.Number),
+  greptileReviewLimitReachedAtMs: Schema.NullOr(Schema.Number),
+  greptileReviewRequestCount: Schema.Number,
   issueDescription: Schema.String,
   issueId: Schema.String,
   issueIdentifier: Schema.String,
@@ -27,6 +29,11 @@ export type PullRequestStoreService = {
     readonly prNumber: number
     readonly repo: string
   }) => Effect.Effect<OrcaManagedPullRequest | null, PullRequestStoreError>
+  readonly markGreptileReviewLimitReached: (options: {
+    readonly prNumber: number
+    readonly reachedAtMs: number
+    readonly repo: string
+  }) => Effect.Effect<OrcaManagedPullRequest | null, PullRequestStoreError>
   readonly markGreptileReviewRequested: (options: {
     readonly lastReviewedAtMs: number
     readonly prNumber: number
@@ -47,6 +54,8 @@ export type PullRequestStoreService = {
     readonly prUrl: string
     readonly repo: string
     readonly greptileCompletedAtMs?: number | null | undefined
+    readonly greptileReviewLimitReachedAtMs?: number | null | undefined
+    readonly greptileReviewRequestCount?: number | undefined
     readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }) => Effect.Effect<OrcaManagedPullRequest, PullRequestStoreError>
 }
@@ -104,6 +113,8 @@ export const PullRequestStoreLive = Effect.gen(function* () {
     readonly prUrl: string
     readonly repo: string
     readonly greptileCompletedAtMs?: number | null | undefined
+    readonly greptileReviewLimitReachedAtMs?: number | null | undefined
+    readonly greptileReviewRequestCount?: number | undefined
     readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }) =>
     Effect.gen(function* () {
@@ -117,6 +128,15 @@ export const PullRequestStoreLive = Effect.gen(function* () {
           record.greptileCompletedAtMs === undefined
             ? existing?.greptileCompletedAtMs ?? null
             : record.greptileCompletedAtMs,
+        greptileReviewLimitReachedAtMs:
+          record.greptileReviewLimitReachedAtMs === undefined
+            ? existing?.greptileReviewLimitReachedAtMs ?? null
+            : record.greptileReviewLimitReachedAtMs,
+        greptileReviewRequestCount:
+          record.greptileReviewRequestCount === undefined
+            ? existing?.greptileReviewRequestCount
+              ?? (record.waitingForGreptileReviewSinceMs === undefined || record.waitingForGreptileReviewSinceMs === null ? 0 : 1)
+            : record.greptileReviewRequestCount,
         issueDescription: record.issueDescription,
         issueId: record.issueId,
         issueIdentifier: record.issueIdentifier,
@@ -169,6 +189,34 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return updated
     })
 
+  const markGreptileReviewLimitReached = (options: {
+    readonly prNumber: number
+    readonly reachedAtMs: number
+    readonly repo: string
+  }) =>
+    Effect.gen(function* () {
+      const records = yield* list
+      let updated: OrcaManagedPullRequest | null = null
+      const nextRecords = records.map((record) => {
+        if (!(record.repo === options.repo && record.prNumber === options.prNumber)) {
+          return record
+        }
+
+        updated = new OrcaManagedPullRequest({
+          ...record,
+          greptileReviewLimitReachedAtMs: options.reachedAtMs,
+          updatedAtMs: options.reachedAtMs,
+          waitingForGreptileReviewSinceMs: null,
+        })
+        return updated
+      })
+      if (updated === null) {
+        return null
+      }
+      yield* write(nextRecords)
+      return updated
+    })
+
   const markGreptileReviewRequested = (options: {
     readonly lastReviewedAtMs: number
     readonly prNumber: number
@@ -188,6 +236,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
           ...record,
           lastReviewedAtMs: options.lastReviewedAtMs,
           updatedAtMs: now,
+          greptileReviewRequestCount: record.greptileReviewRequestCount + 1,
           waitingForGreptileReviewSinceMs: options.waitingForGreptileReviewSinceMs,
         })
         return updated
@@ -213,7 +262,7 @@ export const PullRequestStoreLive = Effect.gen(function* () {
       return true
     })
 
-  return PullRequestStore.of({ list, markGreptileCompleted, markGreptileReviewRequested, remove, upsert })
+  return PullRequestStore.of({ list, markGreptileCompleted, markGreptileReviewLimitReached, markGreptileReviewRequested, remove, upsert })
 })
 
 export const PullRequestStoreLayer = Layer.effect(PullRequestStore, PullRequestStoreLive)
@@ -232,6 +281,16 @@ const normalizeStoredPullRequest = (record: unknown) =>
   typeof record === "object" && record !== null
     ? {
         greptileCompletedAtMs: null,
+        greptileReviewLimitReachedAtMs: null,
+        greptileReviewRequestCount:
+          "greptileReviewRequestCount" in record && typeof (record as { readonly greptileReviewRequestCount?: unknown }).greptileReviewRequestCount === "number"
+            ? (record as { readonly greptileReviewRequestCount: number }).greptileReviewRequestCount
+            : ("waitingForGreptileReviewSinceMs" in record
+              && typeof (record as { readonly waitingForGreptileReviewSinceMs?: unknown }).waitingForGreptileReviewSinceMs === "number")
+              || ("lastReviewedAtMs" in record && typeof (record as { readonly lastReviewedAtMs?: unknown }).lastReviewedAtMs === "number")
+              || ("greptileCompletedAtMs" in record && typeof (record as { readonly greptileCompletedAtMs?: unknown }).greptileCompletedAtMs === "number")
+              ? 1
+              : 0,
         waitingForGreptileReviewSinceMs: null,
         ...record,
       }

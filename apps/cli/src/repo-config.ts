@@ -15,6 +15,7 @@ export class RepoConfigData extends Schema.Class<RepoConfigData>("orca/RepoConfi
   greptilePollIntervalSeconds: Schema.Number,
   linearLabel: Schema.String,
   linearWorkspace: Schema.optional(Schema.String),
+  maxGreptileReviewRequests: Schema.Number,
   maxWaitingPullRequests: Schema.Number,
   repo: Schema.String,
   setup: Schema.Array(Schema.String),
@@ -23,6 +24,7 @@ export class RepoConfigData extends Schema.Class<RepoConfigData>("orca/RepoConfi
 }) {}
 
 export const defaultGreptilePollIntervalSeconds = 30
+export const defaultMaxGreptileReviewRequests = 4
 export const defaultMaxWaitingPullRequests = 4
 
 export type RepoConfigService = {
@@ -121,6 +123,7 @@ export const RepoConfigLive = Effect.gen(function* () {
         greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
         linearLabel: options?.linearLabel ?? "Orca",
         ...(linearWorkspace === undefined ? {} : { linearWorkspace }),
+        maxGreptileReviewRequests: defaultMaxGreptileReviewRequests,
         maxWaitingPullRequests: defaultMaxWaitingPullRequests,
         repo,
         setup: ["bun install"],
@@ -153,6 +156,7 @@ const normalizeRepoConfig = (json: unknown) =>
   typeof json === "object" && json !== null
     ? {
         greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
+        maxGreptileReviewRequests: defaultMaxGreptileReviewRequests,
         maxWaitingPullRequests: defaultMaxWaitingPullRequests,
         ...json,
         linearWorkspace: normalizeLinearWorkspace(

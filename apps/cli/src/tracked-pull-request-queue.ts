@@ -9,6 +9,7 @@ type TrackedPullRequestFeedback = {
 }
 
 export type TrackedPullRequestQueue = {
+  readonly exhaustedPullRequests: ReadonlyArray<OrcaManagedPullRequest>
   readonly openPullRequests: ReadonlyArray<OrcaManagedPullRequest>
   readonly pendingReviews: ReadonlyArray<PendingPullRequestReview>
   readonly pullRequestsNeedingBaseSync: ReadonlyArray<OrcaManagedPullRequest>
@@ -18,6 +19,7 @@ export type TrackedPullRequestQueue = {
 
 export const loadTrackedPullRequestQueue = (options: {
   readonly github: Pick<GitHubService, "readPullRequestFeedback">
+  readonly maxGreptileReviewRequests: number
   readonly pullRequestStore: Pick<PullRequestStoreService, "list" | "remove">
 }) =>
   Effect.gen(function* () {
@@ -31,7 +33,9 @@ export const loadTrackedPullRequestQueue = (options: {
         }).pipe(Effect.map((feedback) => ({ feedback, pullRequest }))),
       { concurrency: 1 },
     )
-    const queue = summarizeTrackedPullRequestQueue(trackedPullRequestFeedback)
+    const queue = summarizeTrackedPullRequestQueue(trackedPullRequestFeedback, {
+      maxGreptileReviewRequests: options.maxGreptileReviewRequests,
+    })
 
     yield* Effect.forEach(
       queue.stalePullRequests,
@@ -48,7 +52,11 @@ export const loadTrackedPullRequestQueue = (options: {
 
 export const summarizeTrackedPullRequestQueue = (
   trackedPullRequests: ReadonlyArray<TrackedPullRequestFeedback>,
+  options: {
+    readonly maxGreptileReviewRequests: number
+  },
 ): TrackedPullRequestQueue => {
+  const exhaustedPullRequests: Array<OrcaManagedPullRequest> = []
   const openPullRequests: Array<OrcaManagedPullRequest> = []
   const pendingReviews: Array<PendingPullRequestReview> = []
   const pullRequestsNeedingBaseSync: Array<OrcaManagedPullRequest> = []
@@ -64,6 +72,10 @@ export const summarizeTrackedPullRequestQueue = (
     openPullRequests.push(trackedPullRequest.pullRequest)
 
     if (needsBaseSync(trackedPullRequest.feedback)) {
+      if (hasReachedGreptileReviewRequestLimit(trackedPullRequest.pullRequest, options.maxGreptileReviewRequests)) {
+        exhaustedPullRequests.push(trackedPullRequest.pullRequest)
+        continue
+      }
       pullRequestsNeedingBaseSync.push(trackedPullRequest.pullRequest)
       continue
     }
@@ -74,6 +86,10 @@ export const summarizeTrackedPullRequestQueue = (
 
     const pendingReview = findPendingPullRequestReview(trackedPullRequest)
     if (pendingReview !== null) {
+      if (hasReachedGreptileReviewRequestLimit(trackedPullRequest.pullRequest, options.maxGreptileReviewRequests)) {
+        exhaustedPullRequests.push(trackedPullRequest.pullRequest)
+        continue
+      }
       pendingReviews.push(pendingReview)
       continue
     }
@@ -86,6 +102,7 @@ export const summarizeTrackedPullRequestQueue = (
   pendingReviews.sort(comparePendingPullRequestReviews)
 
   return {
+    exhaustedPullRequests,
     openPullRequests,
     pendingReviews,
     pullRequestsNeedingBaseSync,
@@ -102,4 +119,7 @@ const needsBaseSync = (feedback: PullRequestFeedback) =>
   mergeStatesNeedingBaseSync.has(feedback.mergeStateStatus.toUpperCase())
 
 const isTrackedForGreptileLoop = (pullRequest: OrcaManagedPullRequest) =>
-  pullRequest.greptileCompletedAtMs === null
+  pullRequest.greptileCompletedAtMs === null && pullRequest.greptileReviewLimitReachedAtMs === null
+
+const hasReachedGreptileReviewRequestLimit = (pullRequest: OrcaManagedPullRequest, maxGreptileReviewRequests: number) =>
+  pullRequest.greptileReviewRequestCount >= maxGreptileReviewRequests

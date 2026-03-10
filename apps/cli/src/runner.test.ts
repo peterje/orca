@@ -949,6 +949,66 @@ describe("Runner", () => {
       }))),
     ))
 
+  it.effect("stops the Greptile loop after the configured review limit is reached", () => {
+    const linearComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const greptileReviewLimitReachedPullRequests: Array<{
+      readonly prNumber: number
+      readonly reachedAtMs: number
+      readonly repo: string
+    }> = []
+
+    return withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const result = yield* runner.runNext
+
+        expect(result).toMatchObject({
+          issueIdentifier: "ENG-2",
+          mode: "implementation",
+        })
+        expect(greptileReviewLimitReachedPullRequests).toHaveLength(1)
+        expect(greptileReviewLimitReachedPullRequests[0]).toMatchObject({
+          prNumber: 42,
+          repo: "peterje/orca",
+        })
+        expect(linearComments[0]).toEqual({
+          body: [
+            "Orca stopped the Greptile loop for ENG-1 after 4 review requests without reaching 5/5.",
+            "",
+            "- next step: break the work into smaller changes or retry with a fresh pull request.",
+            "- PR: https://github.com/peterje/orca/pull/42",
+          ].join("\n"),
+          issueId: "issue-1",
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        config: { maxGreptileReviewRequests: 4 },
+        greptileReviewLimitReachedPullRequests,
+        issues: [issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "Fresh work" })],
+        linearComments,
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [comment({ authorLogin: "greptile-apps[bot]", body: "Please reduce the scope.", createdAtMs: 12, isBot: true })],
+            number: 42,
+            reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 10, isBot: true })],
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            greptileReviewRequestCount: 4,
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+            waitingForGreptileReviewSinceMs: 1,
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    )
+  })
+
   it.effect("ignores stale tracked pull requests when enforcing the waiting cap", () =>
     withTempDirectory((tempDirectory) => {
       const removedPullRequests: Array<string> = []
@@ -1251,6 +1311,11 @@ const makeRunnerLayer = (options: {
     readonly prNumber: number
     readonly repo: string
   }>
+  readonly greptileReviewLimitReachedPullRequests?: Array<{
+    readonly prNumber: number
+    readonly reachedAtMs: number
+    readonly repo: string
+  }>
   readonly linearComments?: Array<{ readonly body: string; readonly issueId: string }>
   readonly markGreptileCompletedReturnsNull?: boolean
   readonly mergeConflictPromptRequests?: Array<{
@@ -1302,6 +1367,8 @@ const makeRunnerLayer = (options: {
     readonly prNumber: number
     readonly prUrl: string
     readonly repo: string
+    readonly greptileReviewLimitReachedAtMs?: number | null | undefined
+    readonly greptileReviewRequestCount?: number | undefined
     readonly waitingForGreptileReviewSinceMs?: number | null | undefined
   }>
   readonly trackedPullRequests?: ReadonlyArray<OrcaManagedPullRequest>
@@ -1328,6 +1395,7 @@ const makeRunnerLayer = (options: {
   const mergeConflictPromptRequests = options.mergeConflictPromptRequests ?? []
   const removedPullRequests = options.removedPullRequests ?? []
   const greptileCompletedPullRequests = options.greptileCompletedPullRequests ?? []
+  const greptileReviewLimitReachedPullRequests = options.greptileReviewLimitReachedPullRequests ?? []
   const linearComments = options.linearComments ?? []
   const readPullRequestFeedbackRequests = options.readPullRequestFeedbackRequests ?? []
   const readyForReviewRequests = options.readyForReviewRequests ?? []
@@ -1465,6 +1533,23 @@ const makeRunnerLayer = (options: {
                   pullRequest.repo === record.repo && pullRequest.prNumber === record.prNumber ? updated : pullRequest)
                 return updated
               }),
+            markGreptileReviewLimitReached: (record) =>
+              Effect.sync(() => {
+                greptileReviewLimitReachedPullRequests.push(record)
+                const existing = trackedPullRequests.find((pullRequest) => pullRequest.repo === record.repo && pullRequest.prNumber === record.prNumber) ?? null
+                if (existing === null) {
+                  return null
+                }
+                const updated = new OrcaManagedPullRequest({
+                  ...existing,
+                  greptileReviewLimitReachedAtMs: record.reachedAtMs,
+                  updatedAtMs: record.reachedAtMs,
+                  waitingForGreptileReviewSinceMs: null,
+                })
+                trackedPullRequests = trackedPullRequests.map((pullRequest) =>
+                  pullRequest.repo === record.repo && pullRequest.prNumber === record.prNumber ? updated : pullRequest)
+                return updated
+              }),
             markGreptileReviewRequested: (request) =>
               Effect.sync(() => {
                 recordedGreptileReviewRequests.push(request)
@@ -1476,6 +1561,7 @@ const makeRunnerLayer = (options: {
                   ...existing,
                   lastReviewedAtMs: request.lastReviewedAtMs,
                   updatedAtMs: 1,
+                  greptileReviewRequestCount: existing.greptileReviewRequestCount + 1,
                   waitingForGreptileReviewSinceMs: request.waitingForGreptileReviewSinceMs,
                 })
                 trackedPullRequests = trackedPullRequests.map((pullRequest) =>
@@ -1499,6 +1585,8 @@ const makeRunnerLayer = (options: {
                   branch: record.branch,
                   createdAtMs: 1,
                   greptileCompletedAtMs: record.greptileCompletedAtMs ?? null,
+                  greptileReviewLimitReachedAtMs: record.greptileReviewLimitReachedAtMs ?? null,
+                  greptileReviewRequestCount: record.greptileReviewRequestCount ?? (record.waitingForGreptileReviewSinceMs == null ? 0 : 1),
                   issueDescription: record.issueDescription,
                   issueId: record.issueId,
                   issueIdentifier: record.issueIdentifier,
@@ -1537,6 +1625,7 @@ const makeRunnerLayer = (options: {
               greptilePollIntervalSeconds: 30,
               linearLabel: "Orca",
               linearWorkspace: undefined,
+              maxGreptileReviewRequests: 4,
               maxWaitingPullRequests: 4,
               repo: "peterje/orca",
               setup: ["bun install"],
@@ -1601,6 +1690,8 @@ const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Typ
     branch: overrides.branch ?? `orca/${overrides.issueIdentifier.toLowerCase()}`,
     createdAtMs: overrides.createdAtMs ?? 1,
     greptileCompletedAtMs: overrides.greptileCompletedAtMs ?? null,
+    greptileReviewLimitReachedAtMs: overrides.greptileReviewLimitReachedAtMs ?? null,
+    greptileReviewRequestCount: overrides.greptileReviewRequestCount ?? 1,
     issueDescription: overrides.issueDescription ?? "Example issue description",
     issueId: overrides.issueId,
     issueIdentifier: overrides.issueIdentifier,
