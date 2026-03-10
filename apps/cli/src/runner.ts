@@ -1057,6 +1057,15 @@ export const reportFailureCause = (options: {
     })
   }
 
+  const [firstFailure] = failures
+  if (firstFailure !== undefined) {
+    return publishOrcaEvent({
+      issueIdentifier: options.issue.issueIdentifier,
+      message: formatFailureMessages(failures.map(getErrorMessage)),
+      type: "run-failed",
+    })
+  }
+
   return Effect.void
 }
 

@@ -1398,7 +1398,7 @@ describe("Runner", () => {
     )
   })
 
-  it.effect("skips reporting non-reportable failure causes", () => {
+  it.effect("publishes run-failed for non-reportable failure causes without commenting", () => {
     const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
     const publishedEvents: Array<OrcaServerEvent> = []
 
@@ -1438,7 +1438,13 @@ describe("Runner", () => {
         }),
       )),
       Effect.andThen(Effect.sync(() => {
-        expect(publishedEvents).toEqual([])
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            message: "Missing repo config",
+            type: "run-failed",
+          },
+        ])
         expect(issueComments).toEqual([])
       })),
     )

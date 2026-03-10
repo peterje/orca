@@ -35,13 +35,11 @@ const supportLayer = Layer.mergeAll(
   GitHubLayer,
 )
 
-const linearLayer = LinearLayer
-
-const executionLayer = RunnerLayer.pipe(Layer.provide([linearLayer, supportLayer]))
-const missionControlLayer = MissionControlLayer.pipe(Layer.provide([linearLayer, supportLayer]))
+const executionLayer = RunnerLayer.pipe(Layer.provide([LinearLayer, supportLayer]))
+const missionControlLayer = MissionControlLayer.pipe(Layer.provide([LinearLayer, supportLayer]))
 
 const appLayer = Layer.mergeAll(
-  linearLayer,
+  LinearLayer,
   supportLayer,
   executionLayer,
   missionControlLayer,
