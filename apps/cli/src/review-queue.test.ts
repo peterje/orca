@@ -150,6 +150,7 @@ describe("review queue", () => {
     expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
     expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
     expect(pending?.feedbackMarkdown).toContain("If human and Greptile feedback conflict, follow the human feedback first")
+    expect(pending?.feedbackMarkdown).toContain("freshness=\"carried-forward\"")
     expect(pending?.feedbackMarkdown).toContain("Use the human naming here.")
     expect(pending?.feedbackMarkdown).toContain("source=\"greptile\"")
     expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
@@ -193,7 +194,7 @@ describe("review queue", () => {
     expect(pending?.latestFeedbackAtMs).toBe(70)
   })
 
-  it("does not treat a Greptile reply on a mixed thread as fresh human feedback", () => {
+  it("treats a Greptile reply on a mixed thread as fresh Greptile feedback", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
         reviewThreads: [
@@ -223,7 +224,14 @@ describe("review queue", () => {
       pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
     })
 
-    expect(pending).toBeNull()
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("If human and Greptile feedback conflict, follow the human feedback first")
+    expect(pending?.feedbackMarkdown).toContain("Use the reviewer naming here.")
+    expect(pending?.feedbackMarkdown).toContain("I still prefer the bot naming here.")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.latestFeedbackAtMs).toBe(30)
   })
 
   it("does not requeue the same mixed thread while waiting for the next Greptile pass", () => {
@@ -289,9 +297,9 @@ describe("review queue", () => {
 
     expect(pending).not.toBeNull()
     expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
-    expect(pending?.feedbackMarkdown).toContain('<comment author="reviewer" path="apps/cli/src/runner.ts" priority="human" source="human">')
+    expect(pending?.feedbackMarkdown).toContain('<comment author="reviewer" path="apps/cli/src/runner.ts" priority="human" source="human" freshness="fresh">')
     expect(pending?.feedbackMarkdown).toContain('<comment author="greptile-apps[bot]" source="greptile">')
-    expect(pending?.feedbackMarkdown).not.toContain('<comment author="greptile-apps[bot]" path="apps/cli/src/runner.ts" priority="human" source="greptile">')
+    expect(pending?.feedbackMarkdown).not.toContain('<comment author="greptile-apps[bot]" path="apps/cli/src/runner.ts" priority="human" source="greptile" freshness="fresh">')
   })
 
   it("omits stale Greptile threads once the latest score is complete", () => {

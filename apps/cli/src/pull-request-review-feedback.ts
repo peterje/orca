@@ -39,7 +39,14 @@ type ReviewFeedbackReviewComment = PullRequestReviewComment & {
 
 type ReviewFeedbackThread = {
   readonly comments: ReadonlyArray<ReviewFeedbackReviewComment>
+  readonly latestGreptileActivityAtMs: number | null
+  readonly latestHumanActivityAtMs: number | null
   readonly latestActivityAtMs: number
+}
+
+type PromptReviewThread = {
+  readonly freshness: "fresh" | "carried-forward"
+  readonly thread: ReviewFeedbackThread
 }
 
 type GreptileScoreEntry =
@@ -57,8 +64,11 @@ export const buildPullRequestReviewPromptInput = (options: {
     .filter((thread): thread is ReviewFeedbackThread => thread !== null)
     .sort(compareReviewThreads)
 
-  const humanThreads = unresolvedThreads.filter((thread) => thread.comments.some((comment) => comment.source === "human"))
-  const greptileThreads = unresolvedThreads.filter((thread) => thread.comments.every((comment) => comment.source === "greptile"))
+  // Mixed threads stay in the human section so the latest human direction remains the
+  // primary instruction, but fresh Greptile replies on those threads still count as
+  // fresh Greptile feedback when deciding whether to requeue review work.
+  const humanThreads = unresolvedThreads.filter((thread) => hasThreadSource(thread, "human"))
+  const greptileThreads = unresolvedThreads.filter((thread) => !hasThreadSource(thread, "human") && hasThreadSource(thread, "greptile"))
 
   const humanComments = options.feedback.comments
     .filter((comment) => comment.body.trim().length > 0)
@@ -99,7 +109,11 @@ export const buildPullRequestReviewPromptInput = (options: {
 
   const freshGreptileThreads = filterFreshThreads(greptileThreads, options.greptileSince)
   const freshGreptileThreadTimestampsMs = getFreshThreadTimestampsMs(freshGreptileThreads, options.greptileSince)
-  const latestFreshGreptileThreadAtMs = findLatestNumber(freshGreptileThreadTimestampsMs)
+  const freshGreptileHumanThreadTimestampsMs = getFreshThreadTimestampsMs(humanThreads, options.greptileSince, "greptile")
+  const latestFreshGreptileThreadAtMs = findLatestNumber([
+    ...freshGreptileThreadTimestampsMs,
+    ...freshGreptileHumanThreadTimestampsMs,
+  ])
 
   const hasFreshHumanFeedback = humanComments.length > 0
     || humanReviews.length > 0
@@ -110,14 +124,19 @@ export const buildPullRequestReviewPromptInput = (options: {
   // active score or a newer unresolved Greptile thread to act on.
   const hasFreshGreptileFeedback = activeGreptileScore !== null
     || hasFreshGreptileThreadFeedback
-  const promptHumanThreads = hasFreshGreptileFeedback ? humanThreads : freshHumanThreads
+  const promptHumanThreads = buildPromptHumanThreads({
+    greptileSince: options.greptileSince,
+    hasFreshGreptileFeedback,
+    humanSince: options.humanSince,
+    threads: humanThreads,
+  })
   const promptGreptileComments = hasFreshGreptileFeedback
     ? includeLatestGreptileScoreComment(greptileComments, freshGreptileScoreEntry, activeGreptileScore)
     : []
   const promptGreptileReviews = hasFreshGreptileFeedback
     ? includeLatestGreptileScoreReview(greptileReviews, freshGreptileScoreEntry, activeGreptileScore)
     : []
-  const promptGreptileThreads = hasFreshGreptileFeedback ? freshGreptileThreads : []
+  const promptGreptileThreads = hasFreshGreptileFeedback ? freshGreptileThreads.map(toFreshPromptThread) : []
   const activeGreptileScoreForPrompt = hasFreshGreptileFeedback ? activeGreptileScore : null
   const freshPromptGreptileThreadTimestampsMs = hasFreshGreptileFeedback ? freshGreptileThreadTimestampsMs : []
 
@@ -125,10 +144,13 @@ export const buildPullRequestReviewPromptInput = (options: {
     return null
   }
 
+  // Carried-forward human threads remain in the prompt while fresh Greptile feedback is
+  // active, but only newly-arrived activity should advance the review checkpoint.
   const latestFeedbackAtMs = findLatestNumber([
     ...humanComments.map(getEntryActivityAtMs),
     ...humanReviews.map(getEntryActivityAtMs),
     ...freshHumanThreadTimestampsMs,
+    ...(hasFreshGreptileFeedback ? freshGreptileHumanThreadTimestampsMs : []),
     ...promptGreptileComments.map(getEntryActivityAtMs),
     ...promptGreptileReviews.map(getEntryActivityAtMs),
     ...freshPromptGreptileThreadTimestampsMs,
@@ -210,8 +232,32 @@ const classifyReviewThread = (thread: PullRequestReviewThread): ReviewFeedbackTh
 
   return {
     comments,
+    latestGreptileActivityAtMs: findLatestEntryActivityAtMs(comments.filter((comment) => comment.source === "greptile")),
+    latestHumanActivityAtMs: findLatestEntryActivityAtMs(comments.filter((comment) => comment.source === "human")),
     latestActivityAtMs,
   }
+}
+
+const buildPromptHumanThreads = (options: {
+  readonly greptileSince: number
+  readonly hasFreshGreptileFeedback: boolean
+  readonly humanSince: number
+  readonly threads: ReadonlyArray<ReviewFeedbackThread>
+}): ReadonlyArray<PromptReviewThread> => {
+  if (!options.hasFreshGreptileFeedback) {
+    return options.threads
+      .filter((thread) => hasFreshThreadActivity(thread, options.humanSince, "human"))
+      .map(toFreshPromptThread)
+  }
+
+  return options.threads.map((thread) => ({
+    freshness:
+      hasFreshThreadActivity(thread, options.humanSince, "human")
+      || hasFreshThreadActivity(thread, options.greptileSince, "greptile")
+        ? "fresh"
+        : "carried-forward",
+    thread,
+  }))
 }
 
 const includeLatestGreptileScoreComment = (
@@ -260,31 +306,55 @@ const filterFreshThreads = (
 ) =>
   threads.filter((thread) => findLatestFreshThreadActivityAtMs(thread, since, source) !== null)
 
-const findLatestFreshThreadActivityAtMs = (
+const hasThreadSource = (thread: ReviewFeedbackThread, source: ReviewFeedbackSource) =>
+  getThreadActivityAtMs(thread, source) !== null
+
+const hasFreshThreadActivity = (
   thread: ReviewFeedbackThread,
   since: number,
   source?: ReviewFeedbackSource,
 ) =>
-  findLatestNumber(
-    thread.comments
-      .filter((comment) => (source === undefined || comment.source === source) && getEntryActivityAtMs(comment) > since)
-      .map(getEntryActivityAtMs),
-  )
+  findLatestFreshThreadActivityAtMs(thread, since, source) !== null
+
+const getThreadActivityAtMs = (thread: ReviewFeedbackThread, source?: ReviewFeedbackSource) => {
+  if (source === "human") {
+    return thread.latestHumanActivityAtMs
+  }
+
+  if (source === "greptile") {
+    return thread.latestGreptileActivityAtMs
+  }
+
+  return thread.latestActivityAtMs
+}
+
+const findLatestFreshThreadActivityAtMs = (
+  thread: ReviewFeedbackThread,
+  since: number,
+  source?: ReviewFeedbackSource,
+) => {
+  const latestActivityAtMs = getThreadActivityAtMs(thread, source)
+  return latestActivityAtMs !== null && latestActivityAtMs > since ? latestActivityAtMs : null
+}
 
 const renderPullRequestReviewMarkdown = (options: {
   readonly greptileComments: ReadonlyArray<ReviewFeedbackComment>
   readonly greptileReviews: ReadonlyArray<ReviewFeedbackReview>
-  readonly greptileThreads: ReadonlyArray<ReviewFeedbackThread>
+  readonly greptileThreads: ReadonlyArray<PromptReviewThread>
   readonly humanComments: ReadonlyArray<ReviewFeedbackComment>
   readonly humanReviews: ReadonlyArray<ReviewFeedbackReview>
-  readonly humanThreads: ReadonlyArray<ReviewFeedbackThread>
+  readonly humanThreads: ReadonlyArray<PromptReviewThread>
   readonly reviewScore: PendingGreptileReviewScore | null
 }) => {
   const hasHumanFeedback = options.humanThreads.length > 0 || options.humanReviews.length > 0 || options.humanComments.length > 0
-  const hasGreptileFeedback = options.reviewScore !== null
+  const hasGreptileFollowupInHumanThreads = options.humanThreads.some((thread) => hasThreadSource(thread.thread, "greptile"))
+  const hasStandaloneGreptileFeedback = options.reviewScore !== null
     || options.greptileThreads.length > 0
     || options.greptileReviews.length > 0
     || options.greptileComments.length > 0
+  const hasGreptileFeedback = hasStandaloneGreptileFeedback
+    || hasGreptileFollowupInHumanThreads
+  const hasCarriedForwardHumanThreads = options.humanThreads.some((thread) => thread.freshness === "carried-forward")
   const sections: Array<string> = []
   const pushSection = (...lines: Array<string>) => {
     if (sections.length > 0) {
@@ -305,6 +375,9 @@ const renderPullRequestReviewMarkdown = (options: {
 
     if (options.humanThreads.length > 0) {
       sections.push("", "### Unresolved review threads", "")
+      if (hasCarriedForwardHumanThreads) {
+        sections.push("Threads marked `freshness=\"carried-forward\"` are older unresolved human context kept visible while newer Greptile feedback is active.", "")
+      }
       sections.push(...options.humanThreads.map(renderReviewThread))
     }
 
@@ -321,7 +394,7 @@ const renderPullRequestReviewMarkdown = (options: {
     }
   }
 
-  if (hasGreptileFeedback) {
+  if (hasStandaloneGreptileFeedback) {
     pushSection("## Greptile feedback")
 
     if (options.reviewScore !== null) {
@@ -372,13 +445,16 @@ const compareReviewThreads = (left: ReviewFeedbackThread, right: ReviewFeedbackT
 const getThreadPriority = (thread: ReviewFeedbackThread) =>
   thread.comments.some((comment) => comment.source === "human") ? 0 : 1
 
-const renderReviewThread = (thread: ReviewFeedbackThread) => {
-  const priority = getThreadPriority(thread) === 0 ? "human" : "greptile"
-  const primaryComment = getPrimaryThreadComment(thread, priority)
+const toFreshPromptThread = (thread: ReviewFeedbackThread): PromptReviewThread => ({ freshness: "fresh", thread })
+
+const renderReviewThread = (promptThread: PromptReviewThread) => {
+  const priority = getThreadPriority(promptThread.thread) === 0 ? "human" : "greptile"
+  const primaryComment = getPrimaryThreadComment(promptThread.thread, priority)
 
   return renderReviewComment(
     primaryComment,
-    thread.comments.filter((comment) => comment.id !== primaryComment.id),
+    promptThread.thread.comments.filter((comment) => comment.id !== primaryComment.id),
+    promptThread.freshness,
     priority,
   )
 }
@@ -394,8 +470,9 @@ const getPrimaryThreadComment = (thread: ReviewFeedbackThread, priority: ReviewF
 const renderReviewComment = (
   comment: ReviewFeedbackReviewComment,
   followup: ReadonlyArray<ReviewFeedbackReviewComment>,
+  freshness: PromptReviewThread["freshness"],
   priority: ReviewFeedbackSource,
-) => `<comment author="${comment.authorLogin}" path="${comment.path}" priority="${priority}" source="${comment.source}">
+) => `<comment author="${comment.authorLogin}" path="${comment.path}" priority="${priority}" source="${comment.source}" freshness="${freshness}">
   <diffHunk><![CDATA[
 ${comment.diffHunk}
   ]]></diffHunk>
