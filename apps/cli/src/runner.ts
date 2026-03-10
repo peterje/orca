@@ -138,7 +138,7 @@ export const RunnerLive = Effect.gen(function* () {
     const storedPullRequests = yield* pullRequestStore.list.pipe(Effect.mapError(toRunnerFailure))
 
     yield* Effect.forEach(
-      storedPullRequests,
+      storedPullRequests.filter(isWaitingForGreptileReview),
       (pullRequest) =>
         Effect.gen(function* () {
           const feedback = yield* github.readPullRequestFeedback({
@@ -150,10 +150,6 @@ export const RunnerLive = Effect.gen(function* () {
               prNumber: pullRequest.prNumber,
               repo: pullRequest.repo,
             }).pipe(Effect.mapError(toRunnerFailure))
-            return
-          }
-
-          if (!isWaitingForGreptileReview(pullRequest)) {
             return
           }
 
@@ -170,12 +166,11 @@ export const RunnerLive = Effect.gen(function* () {
             return
           }
 
-          if (feedback.isDraft) {
-            yield* github.markPullRequestReadyForReview({
-              pullRequestNumber: pullRequest.prNumber,
-              repo: pullRequest.repo,
-            }).pipe(Effect.mapError(toRunnerFailure))
-          }
+          yield* github.markPullRequestReadyForReview({
+            isDraft: feedback.isDraft,
+            pullRequestNumber: pullRequest.prNumber,
+            repo: pullRequest.repo,
+          }).pipe(Effect.mapError(toRunnerFailure))
 
           const updatedPullRequest = yield* pullRequestStore.markGreptileCompleted({
             completedAtMs: Date.now(),

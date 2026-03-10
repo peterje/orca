@@ -77,6 +77,51 @@ describe("tracked pull request queue", () => {
       expect(removedPullRequests).toEqual([])
     }))
 
+  it.effect("prunes terminal pull requests that were closed or merged before reload", () =>
+    Effect.gen(function* () {
+      const removedPullRequests: Array<string> = []
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileCompletedAtMs: 20,
+              issueId: "issue-6",
+              issueIdentifier: "ENG-6",
+              lastReviewedAtMs: 15,
+              prNumber: 48,
+              prUrl: "https://github.com/peterje/orca/pull/48",
+            }),
+            trackedPullRequest({
+              greptileCompletedAtMs: 21,
+              issueId: "issue-7",
+              issueIdentifier: "ENG-7",
+              lastReviewedAtMs: 16,
+              prNumber: 49,
+              prUrl: "https://github.com/peterje/orca/pull/49",
+            }),
+          ]),
+          remove: ({ prNumber, repo }) =>
+            Effect.sync(() => {
+              removedPullRequests.push(`${repo}#${prNumber}`)
+              return true
+            }),
+        },
+      })
+
+      expect(queue.openPullRequests).toEqual([])
+      expect(queue.pendingReviews).toEqual([])
+      expect(queue.waitingForReviewPullRequests).toEqual([])
+      expect(queue.stalePullRequests.map((pullRequest) => pullRequest.issueIdentifier)).toEqual(["ENG-6", "ENG-7"])
+      expect(removedPullRequests).toEqual(["peterje/orca#48", "peterje/orca#49"])
+    }))
+
   it.effect("separates tracked pull requests that need a base sync from review follow-up work", () =>
     Effect.gen(function* () {
       const queue = yield* loadTrackedPullRequestQueue({
@@ -153,6 +198,8 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
     ],
     url: "https://github.com/peterje/orca/pull/47",
   }),
+  "peterje/orca#48": pullRequestFeedback({ number: 48, state: "CLOSED", url: "https://github.com/peterje/orca/pull/48" }),
+  "peterje/orca#49": pullRequestFeedback({ number: 49, state: "MERGED", url: "https://github.com/peterje/orca/pull/49" }),
 }
 
 const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Type> & Pick<typeof OrcaManagedPullRequest.Type, "issueId" | "issueIdentifier" | "prNumber" | "prUrl">) =>

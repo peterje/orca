@@ -65,6 +65,7 @@ export type GitHubService = {
     readonly repo: string
   }) => Effect.Effect<PullRequestFeedback, GitHubError>
   markPullRequestReadyForReview: (options: {
+    readonly isDraft?: boolean | undefined
     readonly pullRequestNumber: number
     readonly repo: string
   }) => Effect.Effect<void, GitHubError>
@@ -328,11 +329,12 @@ export const GitHubLive = Effect.gen(function* () {
     )
 
   const markPullRequestReadyForReview = (options: {
+    readonly isDraft?: boolean | undefined
     readonly pullRequestNumber: number
     readonly repo: string
   }) =>
     Effect.gen(function* () {
-      const isDraft = yield* readPullRequestDraftState(options)
+      const isDraft = options.isDraft ?? (yield* readPullRequestDraftState(options))
       if (!isDraft) {
         return
       }

@@ -202,22 +202,19 @@ describe("GitHub", () => {
     )
   })
 
-  it.effect("marks pull requests ready for review", () => {
+  it.effect("marks draft pull requests ready for review without re-reading draft state", () => {
     const commands: Array<CommandInvocation> = []
 
     return Effect.gen(function* () {
       const github = yield* GitHub
 
       yield* github.markPullRequestReadyForReview({
+        isDraft: true,
         pullRequestNumber: 42,
         repo: "peterje/orca",
       })
 
       expect(commands.filter((command) => command.args[0] === "pr")).toEqual([
-        {
-          args: ["pr", "view", "42", "--repo", "peterje/orca", "--json", "isDraft", "-q", ".isDraft"],
-          command: "gh",
-        },
         {
           args: ["pr", "ready", "42", "--repo", "peterje/orca"],
           command: "gh",
@@ -229,10 +226,30 @@ describe("GitHub", () => {
           onCommand: (command) => {
             commands.push(command)
           },
-          stdout: (command) =>
-            command.args[1] === "view"
-              ? "true\n"
-              : "",
+        }),
+      ),
+    )
+  })
+
+  it.effect("treats already-ready pull requests as a no-op when the caller already knows the draft state", () => {
+    const commands: Array<CommandInvocation> = []
+
+    return Effect.gen(function* () {
+      const github = yield* GitHub
+
+      yield* github.markPullRequestReadyForReview({
+        isDraft: false,
+        pullRequestNumber: 42,
+        repo: "peterje/orca",
+      })
+
+      expect(commands.filter((command) => command.args[0] === "pr")).toEqual([])
+    }).pipe(
+      Effect.provide(
+        makeGitHubLayer({
+          onCommand: (command) => {
+            commands.push(command)
+          },
         }),
       ),
     )
