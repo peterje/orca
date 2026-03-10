@@ -7,7 +7,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "bun build ./apps/cli/src/cli.ts --outfile ./dist/orca --target bun && bun build ./apps/server/src/main.ts --outfile ./dist/orca-server --target bun",
+    "build": "bun build ./apps/cli/src/cli.ts --outfile ./dist/orca --target bun && bun build ./apps/server/src/main.ts --outfile ./dist/orca-server --target bun && chmod +x ./dist/orca ./dist/orca-server",
     "check": "bunx tsc --noEmit",
     "test": "bunx vitest run",
     "orca": "bun run ./apps/cli/src/cli.ts",

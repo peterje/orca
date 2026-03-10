@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url"
-import { Data, Effect, FileSystem, Layer, Option, PlatformError, Schema, ServiceMap } from "effect"
+import { Clock, Data, Effect, FileSystem, Layer, Option, PlatformError, Schema, ServiceMap } from "effect"
 import { IssuePlanData, type IssuePlan } from "./issue-planner.ts"
 import { LinearViewerData, type LinearViewer } from "./linear.ts"
 import { LinearApiError } from "./linear.ts"
@@ -103,6 +103,18 @@ export const OrcaClientLayer = Layer.effect(
 
     const logServerStartup = (message: string) => Effect.sync(() => process.stderr.write(`${message}\n`))
 
+    const sleepUntilNextServerStartupPoll = (deadlineMs: number) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((nowMs) => {
+          const remainingMs = deadlineMs - nowMs
+          if (remainingMs <= 0) {
+            return Effect.succeed(false as const)
+          }
+
+          return Effect.sleep(Math.min(serverStartupPollIntervalMs, remainingMs)).pipe(Effect.as(true as const))
+        }),
+      )
+
     const isServerReady = (control: typeof OrcaServerControlData.Type) =>
       Effect.gen(function* () {
         if (!isPidRunning(control.pid)) {
@@ -131,22 +143,8 @@ export const OrcaClientLayer = Layer.effect(
         return response !== false && response.ok
       })
 
-    const spawnServer = Effect.gen(function* () {
-      const hasDistBinary = yield* fs.exists(serverBinaryPath).pipe(Effect.orElseSucceed(() => false))
-      const hasSourceEntry = yield* fs.exists(serverSourceEntryPath).pipe(Effect.orElseSucceed(() => false))
-      const command = hasDistBinary
-        ? [serverBinaryPath]
-        : hasSourceEntry
-          ? ["bun", "run", serverSourceEntryPath]
-          : null
-
-      if (command === null) {
-        return yield* Effect.fail(new OrcaClientError({
-          message: `Could not locate the local Orca server binary or source entrypoint. Checked ${serverBinaryPath} and ${serverSourceEntryPath}.`,
-        }))
-      }
-
-      yield* Effect.try({
+    const spawnDetachedProcess = (command: Array<string>) =>
+      Effect.try({
         try: () => {
           const child = Bun.spawn(command, {
             cwd: process.cwd(),
@@ -157,8 +155,40 @@ export const OrcaClientLayer = Layer.effect(
           })
           child.unref()
         },
-        catch: (cause) => new OrcaClientError({ message: "Failed to start the local Orca server.", cause }),
+        catch: (cause) => cause,
       })
+
+    const spawnServer = Effect.gen(function* () {
+      const hasDistBinary = yield* fs.exists(serverBinaryPath).pipe(Effect.orElseSucceed(() => false))
+      const hasSourceEntry = yield* fs.exists(serverSourceEntryPath).pipe(Effect.orElseSucceed(() => false))
+
+      if (!hasDistBinary && !hasSourceEntry) {
+        return yield* Effect.fail(new OrcaClientError({
+          message: `Could not locate the local Orca server binary or source entrypoint. Checked ${serverBinaryPath} and ${serverSourceEntryPath}.`,
+        }))
+      }
+
+      if (hasDistBinary) {
+        const spawnedDistBinary = yield* spawnDetachedProcess([serverBinaryPath]).pipe(
+          Effect.as(true as const),
+          Effect.catch((cause) =>
+            isPermissionDeniedError(cause)
+              ? Effect.succeed(false as const)
+              : Effect.fail(new OrcaClientError({ message: "Failed to start the local Orca server.", cause }))),
+        )
+
+        if (spawnedDistBinary) {
+          return
+        }
+
+        return yield* spawnDetachedProcess(["bun", "run", serverBinaryPath]).pipe(
+          Effect.mapError((cause) => new OrcaClientError({ message: "Failed to start the local Orca server.", cause })),
+        )
+      }
+
+      yield* spawnDetachedProcess(["bun", "run", serverSourceEntryPath]).pipe(
+        Effect.mapError((cause) => new OrcaClientError({ message: "Failed to start the local Orca server.", cause })),
+      )
     })
 
     const acquireSpawnLock = Effect.gen(function* () {
@@ -166,7 +196,9 @@ export const OrcaClientLayer = Layer.effect(
         Effect.mapError((cause) => new OrcaClientError({ message: `Failed to create ${orcaDirectory}.`, cause })),
       )
 
-      for (let attempt = 0; attempt < serverStartupMaxAttempts; attempt += 1) {
+      const deadlineMs = (yield* Clock.currentTimeMillis) + serverStartupTimeoutMs
+
+      for (let attempt = 0; ; attempt += 1) {
         const acquired = yield* fs.writeFileString(
           lockFile,
           JSON.stringify(Schema.encodeUnknownSync(OrcaServerStartupLockData)({ pid: process.pid, startedAtMs: Date.now() }), null, 2) + "\n",
@@ -200,7 +232,10 @@ export const OrcaClientLayer = Layer.effect(
           continue
         }
 
-        yield* Effect.sleep(serverStartupPollIntervalMs)
+        const shouldContinue = yield* sleepUntilNextServerStartupPoll(deadlineMs)
+        if (!shouldContinue) {
+          break
+        }
       }
 
       return yield* Effect.fail(
@@ -211,17 +246,24 @@ export const OrcaClientLayer = Layer.effect(
     })
 
     const waitForServer = Effect.gen(function* () {
-      for (let attempt = 0; attempt < serverStartupMaxAttempts; attempt += 1) {
+      const deadlineMs = (yield* Clock.currentTimeMillis) + serverStartupTimeoutMs
+
+      for (let attempt = 0; ; attempt += 1) {
         const controlOption = yield* readControlOption
         if (Option.isSome(controlOption) && (yield* isServerReady(controlOption.value))) {
           return controlOption.value
         }
 
-        if (attempt > 0 && attempt % serverStartupLogIntervalAttempts === 0) {
+        if (attempt === 0) {
+          yield* logServerStartup("Waiting for the local Orca server to be ready...")
+        } else if (attempt % serverStartupLogIntervalAttempts === 0) {
           yield* logServerStartup("Still waiting for the local Orca server to start...")
         }
 
-        yield* Effect.sleep(serverStartupPollIntervalMs)
+        const shouldContinue = yield* sleepUntilNextServerStartupPoll(deadlineMs)
+        if (!shouldContinue) {
+          break
+        }
       }
 
       return yield* Effect.fail(
@@ -375,8 +417,7 @@ const defaultServerRequestTimeoutMs = 60_000
 const defaultRunNextTimeoutBufferMinutes = 5
 const serverStartupPollIntervalMs = 100
 const serverStartupLogIntervalAttempts = 10
-const serverStartupMaxAttempts = 300
-const serverStartupTimeoutMs = serverStartupPollIntervalMs * serverStartupMaxAttempts
+const serverStartupTimeoutMs = 30_000
 const serverBinaryPath = fileURLToPath(new URL("./orca-server", import.meta.url))
 const serverSourceEntryPath = fileURLToPath(new URL("../../server/src/main.ts", import.meta.url))
 
@@ -501,6 +542,8 @@ const hasTag = <Tag extends string>(value: unknown, tag: Tag): value is { readon
 
 const hasCode = <Code extends string>(value: unknown, code: Code): value is { readonly code: Code } =>
   typeof value === "object" && value !== null && "code" in value && value.code === code
+
+const isPermissionDeniedError = (value: unknown) => hasCode(value, "EACCES")
 
 const hasReason = (value: unknown): value is { readonly reason: unknown } =>
   typeof value === "object" && value !== null && "reason" in value

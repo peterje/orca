@@ -126,9 +126,10 @@ const main = async () => {
     startedAtMs,
     token,
   })
-  controlFile = await runtime.runPromise(resolveOrcaDirectory().pipe(Effect.map((orcaDirectory) => `${orcaDirectory}/server.json`)))
+  const orcaDirectory = await runtime.runPromise(resolveOrcaDirectory())
+  controlFile = `${orcaDirectory}/server.json`
 
-  await runtime.runPromise(writeServerControl(control))
+  await runtime.runPromise(writeServerControl(control, orcaDirectory))
 }
 
 const handleRequest = async (
@@ -248,10 +249,9 @@ const openEventStream = async (request: Request, serverReadyEvent: ServerReadyEv
   }
 }
 
-const writeServerControl = (control: OrcaServerControlData) =>
+const writeServerControl = (control: OrcaServerControlData, orcaDirectory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const orcaDirectory = yield* resolveOrcaDirectory()
     yield* fs.makeDirectory(orcaDirectory, { recursive: true })
     yield* fs.writeFileString(
       `${orcaDirectory}/server.json`,
