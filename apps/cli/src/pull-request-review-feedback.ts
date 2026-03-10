@@ -110,6 +110,8 @@ export const buildPullRequestReviewPromptInput = (options: {
   const freshGreptileThreads = filterFreshThreads(greptileThreads, options.greptileSince)
   const freshGreptileThreadTimestampsMs = getFreshThreadTimestampsMs(freshGreptileThreads, options.greptileSince)
   const freshGreptileHumanThreadTimestampsMs = getFreshThreadTimestampsMs(humanThreads, options.greptileSince, "greptile")
+  // Combine standalone Greptile threads with Greptile follow-ups on human-owned threads
+  // so either source can reopen review work after the last Greptile checkpoint.
   const latestFreshGreptileThreadAtMs = findLatestNumber([
     ...freshGreptileThreadTimestampsMs,
     ...freshGreptileHumanThreadTimestampsMs,
@@ -146,7 +148,7 @@ export const buildPullRequestReviewPromptInput = (options: {
 
   // Carried-forward human threads remain in the prompt while fresh Greptile feedback is
   // active, but only newly-arrived activity should advance the review checkpoint.
-  const latestFeedbackAtMs = findLatestNumber([
+  const latestFeedbackTimestampCandidates = [
     ...humanComments.map(getEntryActivityAtMs),
     ...humanReviews.map(getEntryActivityAtMs),
     ...freshHumanThreadTimestampsMs,
@@ -155,8 +157,11 @@ export const buildPullRequestReviewPromptInput = (options: {
     ...promptGreptileReviews.map(getEntryActivityAtMs),
     ...freshPromptGreptileThreadTimestampsMs,
     ...(hasFreshGreptileFeedback && freshGreptileScoreEntry !== null ? [latestGreptileScoreEntryAtMs] : []),
-  ])
+  ]
+  const latestFeedbackAtMs = findLatestNumber(latestFeedbackTimestampCandidates)
 
+  // Invariant: at least one timestamp source is present whenever fresh feedback exists.
+  // The mixed-thread-only Greptile path contributes via freshGreptileHumanThreadTimestampsMs.
   if (latestFeedbackAtMs === null) {
     throw new Error("Expected fresh pull request review feedback.")
   }

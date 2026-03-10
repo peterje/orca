@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 import type { PullRequestFeedback } from "./github.ts"
 import { OrcaManagedPullRequest } from "./pull-request-store.ts"
-import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
+import { loadTrackedPullRequestQueue, summarizeTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 
 describe("tracked pull request queue", () => {
   it.effect("prunes stale tracked pull requests and keeps waiting and follow-up states separate", () =>
@@ -59,7 +59,6 @@ describe("tracked pull request queue", () => {
               lastReviewedAtMs: 15,
               prNumber: 47,
               prUrl: "https://github.com/peterje/orca/pull/47",
-              waitingForGreptileReviewSinceMs: 10,
             }),
           ]),
           remove: ({ prNumber, repo }) =>
@@ -204,6 +203,24 @@ describe("tracked pull request queue", () => {
       expect(queue.pendingReviews).toEqual([])
       expect(queue.waitingForReviewPullRequests).toEqual([])
     }))
+
+  it("throws when a completed pull request still claims to be waiting for Greptile", () => {
+    expect(() =>
+      summarizeTrackedPullRequestQueue([
+        {
+          feedback: pullRequestFeedback({ number: 52, url: "https://github.com/peterje/orca/pull/52" }),
+          pullRequest: trackedPullRequest({
+            greptileCompletedAtMs: 30,
+            issueId: "issue-10",
+            issueIdentifier: "ENG-10",
+            prNumber: 52,
+            prUrl: "https://github.com/peterje/orca/pull/52",
+            waitingForGreptileReviewSinceMs: 20,
+          }),
+        },
+      ]),
+    ).toThrow("marked greptile-complete but still waiting for greptile review")
+  })
 })
 
 const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
