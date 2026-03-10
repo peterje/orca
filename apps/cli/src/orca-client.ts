@@ -392,7 +392,7 @@ export const OrcaClientLayer = Layer.effect(
     const pollWaitingPullRequests = requestVoid("/runner/poll-waiting-pull-requests")
 
     const runNext = Effect.gen(function* () {
-      const config = yield* repoConfig.readOption
+      const config = yield* repoConfig.read
 
       return yield* request({
         decode: decodeJson(RunnerResultData, "The local Orca server returned an invalid runner result."),
@@ -436,8 +436,8 @@ const decodeJson = <A, I, RD, RE>(schema: Schema.Codec<A, I, RD, RE>, message: s
     Effect.mapError((cause) => new OrcaClientError({ message, cause })),
   )
 
-const toRunNextTimeoutMs = (config: RepoConfigData | null) =>
-  ((config?.agentTimeoutMinutes ?? 45) + (config?.stallTimeoutMinutes ?? 10) + defaultRunNextTimeoutBufferMinutes) * 60_000
+export const toRunNextTimeoutMs = (config: Pick<RepoConfigData, "agentTimeoutMinutes" | "stallTimeoutMinutes">) =>
+  (config.agentTimeoutMinutes + config.stallTimeoutMinutes + defaultRunNextTimeoutBufferMinutes) * 60_000
 
 export const formatTimeoutDuration = (timeoutMs: number) => {
   if (timeoutMs < 60_000) {

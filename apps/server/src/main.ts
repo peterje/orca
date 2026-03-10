@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { timingSafeEqual } from "node:crypto"
 import { rm } from "node:fs/promises"
 import { Effect, FileSystem, Layer, ManagedRuntime, Schema, Stream } from "effect"
 import { AgentRunnerLayer } from "../../cli/src/agent-runner.ts"
@@ -31,9 +32,9 @@ const supportLayer = Layer.mergeAll(
   PullRequestStoreLayer,
   VerifierLayer,
   GitHubLayer,
-).pipe(Layer.provide(PlatformServices))
+)
 
-const linearLayer = LinearLayer.pipe(Layer.provide(PlatformServices))
+const linearLayer = LinearLayer
 
 const executionLayer = RunnerLayer.pipe(Layer.provide([linearLayer, supportLayer]))
 const missionControlLayer = MissionControlLayer.pipe(Layer.provide([linearLayer, supportLayer]))
@@ -227,18 +228,17 @@ const runVoid = async <A, E>(effect: Effect.Effect<A, E, AppServices>): Promise<
 
 const openEventStream = async (request: Request, serverReadyEvent: ServerReadyEvent): Promise<Response> => {
   try {
-    const services = await runtime.services()
-    const stream = await runtime.runPromise(
+    const readableStream = await runtime.runPromise(
       Effect.gen(function* () {
         const events = yield* OrcaEvents
-        return events.stream.pipe(
+        return yield* events.stream.pipe(
           Stream.prepend([serverReadyEvent]),
           Stream.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`),
           Stream.encodeText,
+          Stream.toReadableStreamEffect(),
         )
       }),
     )
-    const readableStream = Stream.toReadableStreamWith(stream, services)
     const cancelReadableStream = () => {
       void readableStream.cancel().catch(() => undefined)
     }
@@ -271,7 +271,16 @@ const writeServerControl = (control: OrcaServerControlData, orcaDirectory: strin
     )
   })
 
-const isAuthorized = (request: Request, token: string) => request.headers.get("authorization") === `Bearer ${token}`
+const isAuthorized = (request: Request, token: string) => {
+  const authorization = request.headers.get("authorization")
+  if (authorization === null) {
+    return false
+  }
+
+  const actual = Buffer.from(authorization)
+  const expected = Buffer.from(`Bearer ${token}`)
+  return actual.length === expected.length && timingSafeEqual(actual, expected)
+}
 
 const jsonResponse = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), {

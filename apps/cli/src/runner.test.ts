@@ -4,14 +4,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AgentRunner } from "./agent-runner.ts"
-import { GitHub, type PullRequestFeedback, type PullRequestInfo } from "./github.ts"
-import { Linear, type LinearIssue } from "./linear.ts"
+import { GitHub, type GitHubService, type PullRequestFeedback, type PullRequestInfo } from "./github.ts"
+import { Linear, type LinearIssue, type LinearService } from "./linear.ts"
 import { OrcaEvents } from "./orca-events.ts"
 import type { OrcaServerEvent } from "./orca-server-protocol.ts"
 import { PromptGen } from "./prompt-gen.ts"
 import { PullRequestStore, OrcaManagedPullRequest } from "./pull-request-store.ts"
 import { RepoConfig, RepoConfigData } from "./repo-config.ts"
-import { Runner, RunnerLayer } from "./runner.ts"
+import { Runner, RunnerFailure, RunnerLayer, reportFailureCause } from "./runner.ts"
 import { RunState, RunStateBusyError, type ActiveRun } from "./run-state.ts"
 import { Verifier } from "./verifier.ts"
 import { Worktree, type ManagedWorktree } from "./worktree.ts"
@@ -1331,6 +1331,70 @@ describe("Runner", () => {
         publishedEvents,
         worktreeDirectory: join(tempDirectory, "worktree"),
       }))),
+    )
+  })
+
+  it.effect("reports additional parallel failure causes when implementation work fails", () => {
+    const issueComments: Array<{ readonly body: string; readonly issueId: string }> = []
+    const publishedEvents: Array<OrcaServerEvent> = []
+    const worktreeDirectory = "/tmp/orca-worktree"
+
+    const github = {
+      viewCurrentPullRequest: () => Effect.succeed(Option.none()),
+    } as unknown as GitHubService
+
+    const linear = {
+      commentOnIssue: (request: { readonly body: string; readonly issueId: string }) =>
+        Effect.sync(() => {
+          issueComments.push(request)
+        }),
+    } as unknown as LinearService
+
+    return reportFailureCause({
+      cause: Cause.fromReasons([
+        Cause.makeFailReason(new RunnerFailure({ message: "Agent failed" })),
+        Cause.makeDieReason(new Error("Cleanup exploded")),
+      ]),
+      github,
+      issue: {
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+      },
+      linear,
+      managedWorktree: {
+        directory: worktreeDirectory,
+      },
+    }).pipe(
+      Effect.provide(Layer.succeed(
+        OrcaEvents,
+        OrcaEvents.of({
+          publish: (event) =>
+            Effect.sync(() => {
+              publishedEvents.push(event)
+            }),
+          stream: Stream.empty,
+        }),
+      )),
+      Effect.andThen(Effect.sync(() => {
+        expect(publishedEvents).toEqual([
+          {
+            issueIdentifier: "ENG-1",
+            message: "Agent failed (additional causes: Cleanup exploded)",
+            type: "run-failed",
+          },
+        ])
+        expect(issueComments).toEqual([
+          {
+            body: [
+              "Orca failed while working on ENG-1.",
+              "",
+              "- Reason: Agent failed (additional causes: Cleanup exploded)",
+              `- Worktree: ${worktreeDirectory}`,
+            ].join("\n"),
+            issueId: "issue-1",
+          },
+        ])
+      })),
     )
   })
 })

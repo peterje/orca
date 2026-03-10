@@ -1012,7 +1012,7 @@ const reportFailure = (options: {
     }).pipe(Effect.orElseSucceed(() => undefined))
   })
 
-const reportFailureCause = (options: {
+export const reportFailureCause = (options: {
   readonly cause: Cause.Cause<RunnerFailure | RepoConfigError | RunStateBusyError | RunnerNoWorkError>
   readonly github: GitHubService
   readonly issue: {
@@ -1024,7 +1024,40 @@ const reportFailureCause = (options: {
     readonly directory: string
   }
 }) => {
-  const failure = options.cause.reasons.find(Cause.isFailReason)?.error
+  const failures = options.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)
+  const reportableFailures = [
+    ...failures.filter((error): error is RunnerFailure => error instanceof RunnerFailure),
+    ...options.cause.reasons.filter(Cause.isDieReason).map((reason) =>
+      new RunnerFailure({
+        cause: reason.defect,
+        message: getErrorMessage(reason.defect),
+      })),
+    ...options.cause.reasons.filter(Cause.isInterruptReason).map((reason) =>
+      new RunnerFailure({
+        cause: reason,
+        message: "Run was interrupted.",
+      })),
+  ]
+
+  const [firstReportableFailure] = reportableFailures
+  if (firstReportableFailure !== undefined) {
+    const error = reportableFailures.length === 1
+      ? firstReportableFailure
+      : new RunnerFailure({
+          cause: options.cause,
+          message: formatFailureMessages(reportableFailures.map((failure) => failure.message)),
+        })
+
+    return reportFailure({
+      error,
+      github: options.github,
+      issue: options.issue,
+      linear: options.linear,
+      managedWorktree: options.managedWorktree,
+    })
+  }
+
+  const failure = failures[0]
   if (failure !== undefined) {
     return reportFailure({
       error: failure,
@@ -1035,35 +1068,20 @@ const reportFailureCause = (options: {
     })
   }
 
-  const defect = options.cause.reasons.find(Cause.isDieReason)?.defect
-  if (defect !== undefined) {
-    return reportFailure({
-      error: new RunnerFailure({
-        cause: defect,
-        message: getErrorMessage(defect),
-      }),
-      github: options.github,
-      issue: options.issue,
-      linear: options.linear,
-      managedWorktree: options.managedWorktree,
-    })
-  }
-
-  const interrupt = options.cause.reasons.find(Cause.isInterruptReason)
-  if (interrupt !== undefined) {
-    return reportFailure({
-      error: new RunnerFailure({
-        cause: interrupt,
-        message: "Run was interrupted.",
-      }),
-      github: options.github,
-      issue: options.issue,
-      linear: options.linear,
-      managedWorktree: options.managedWorktree,
-    })
-  }
-
   return Effect.void
+}
+
+const formatFailureMessages = (messages: ReadonlyArray<string>) => {
+  const uniqueMessages = Array.from(new Set(messages.map((message) => message.trim()).filter((message) => message.length > 0)))
+  const [firstMessage, ...additionalMessages] = uniqueMessages
+
+  if (firstMessage === undefined) {
+    return "Run failed."
+  }
+
+  return additionalMessages.length === 0
+    ? firstMessage
+    : `${firstMessage} (additional causes: ${additionalMessages.join("; ")})`
 }
 
 const makeImplementationCommitMessage = (issue: PlannedIssue) =>
