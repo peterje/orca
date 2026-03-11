@@ -116,7 +116,7 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
   }) =>
     Effect.gen(function* () {
       const repoInstructions = yield* readAgentsInstructions(fs)
-      const prompt = `Address the attached Greptile pull request review feedback in the current repository without asking for permission.`
+      const prompt = `Address the attached pull request review feedback in the current repository without asking for permission.`
       const promptFileContents = `# Pull request review
 
 Identifier: ${options.issueIdentifier}
@@ -131,7 +131,7 @@ ${options.issueDescription.trim().length > 0 ? options.issueDescription : "No de
 - URL: ${options.pullRequestUrl}
 - Branch: ${options.branch}
 
-## Greptile review feedback
+## Pull request review feedback
 
 ${options.reviewFeedback}
 
@@ -143,7 +143,7 @@ ${repoInstructions}
 
 - Work only in the current worktree on branch \`${options.branch}\`.
 - Base branch is \`${options.baseBranch}\`.
-- Address the requested Greptile feedback and keep the existing pull request moving.
+- Address the requested pull request feedback. When both human and Greptile feedback are present, follow the human direction first when they disagree.
 - Do not ask for permission; pick reasonable defaults and keep going.
 - Do not mutate unrelated git state.
 - Do not commit secrets or any files under \`.orca/\`.
@@ -156,7 +156,7 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 
 ## Required git outcome
 
-- Have the existing branch ready for another Greptile review pass.
+- Have the existing branch ready for another review pass.
 - Use a conventional commit message every time you create a commit.
 - Update the existing pull request instead of creating a new branch or pull request.
 - Keep the pull request title unchanged.
@@ -225,7 +225,7 @@ ${options.verify.length > 0 ? options.verify.map((command) => `- \`${command}\``
 
 ## Required git outcome
 
-- Have the existing branch ready for another Greptile review pass.
+- Have the existing branch ready for another review pass.
 - Resolve all remaining merge conflicts before finishing.
 - Use a conventional commit message every time you create a commit.
 - Update the existing pull request instead of creating a new branch or pull request.

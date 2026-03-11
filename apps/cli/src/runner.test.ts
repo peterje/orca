@@ -949,6 +949,43 @@ describe("Runner", () => {
       }))),
     ))
 
+  it.effect("keeps completed pull requests actionable when human feedback arrives", () =>
+    withTempDirectory((tempDirectory) =>
+      Effect.gen(function* () {
+        const runner = yield* Runner
+        const next = yield* runner.peekNext
+
+        expect(Option.getOrNull(next)).toMatchObject({
+          id: "peterje/orca#42",
+          issueIdentifier: "ENG-1",
+          kind: "review",
+          pullRequestNumber: 42,
+        })
+      }).pipe(Effect.provide(makeRunnerLayer({
+        issues: [issue({ id: "issue-2", identifier: "ENG-2", isOrcaTagged: true, title: "New work" })],
+        pullRequestFeedbackByKey: {
+          "peterje/orca#42": pullRequestFeedback({
+            comments: [comment({ authorLogin: "reviewer", body: "Please keep the human-approved copy.", createdAtMs: 40 })],
+            number: 42,
+            reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 30, isBot: true })],
+            url: "https://github.com/peterje/orca/pull/42",
+          }),
+        },
+        trackedPullRequests: [
+          trackedPullRequest({
+            greptileCompletedAtMs: 35,
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+            issueTitle: "Existing work",
+            lastReviewedAtMs: 20,
+            prNumber: 42,
+            prUrl: "https://github.com/peterje/orca/pull/42",
+          }),
+        ],
+        worktreeDirectory: join(tempDirectory, "worktree"),
+      }))),
+    ))
+
   it.effect("ignores stale tracked pull requests when enforcing the waiting cap", () =>
     withTempDirectory((tempDirectory) => {
       const removedPullRequests: Array<string> = []
@@ -1096,7 +1133,8 @@ describe("Runner", () => {
         expect(reviewPromptRequests).toHaveLength(1)
         expect(reviewPromptRequests[0]?.reviewFeedback).toContain("Confidence: 4/5")
         expect(reviewPromptRequests[0]?.reviewFeedback).toContain("Please rename this helper.")
-        expect(reviewPromptRequests[0]?.reviewFeedback).not.toContain("Human note")
+        expect(reviewPromptRequests[0]?.reviewFeedback).toContain("Human note")
+        expect(reviewPromptRequests[0]?.reviewFeedback).toContain("follow the human feedback first")
       }).pipe(Effect.provide(makeRunnerLayer({
         createdPullRequests,
         currentPullRequest: {
@@ -1474,6 +1512,7 @@ const makeRunnerLayer = (options: {
                 }
                 const updated = new OrcaManagedPullRequest({
                   ...existing,
+                  greptileCompletedAtMs: null,
                   lastReviewedAtMs: request.lastReviewedAtMs,
                   updatedAtMs: 1,
                   waitingForGreptileReviewSinceMs: request.waitingForGreptileReviewSinceMs,

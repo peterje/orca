@@ -21,6 +21,8 @@ describe("review queue", () => {
 
     expect(pending).not.toBeNull()
     expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toMatch(/^## Greptile feedback/)
+    expect(pending?.feedbackMarkdown).not.toContain("# Pull request review feedback")
     expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
     expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
     expect(pending?.feedbackMarkdown).toContain("Please keep this branch scoped.")
@@ -76,7 +78,7 @@ describe("review queue", () => {
     expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
   })
 
-  it("ignores human review feedback in the Greptile loop", () => {
+  it("creates pending review work from human feedback", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
         comments: [comment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: 60 })],
@@ -92,7 +94,370 @@ describe("review queue", () => {
       pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
 
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("source=\"human\"")
+    expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.feedbackMarkdown).not.toContain("If human and Greptile feedback conflict")
+  })
+
+  it("does not resurface stale human threads when only a later human comment is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please also update the helper docs.", createdAtMs: 40 })],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "reviewer", body: "Old human thread", createdAtMs: 10 })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("Please also update the helper docs.")
+    expect(pending?.feedbackMarkdown).not.toContain("Old human thread")
+    expect(pending?.latestFeedbackAtMs).toBe(40)
+  })
+
+  it("keeps unresolved human feedback alongside a later Greptile round", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({ authorLogin: "reviewer", body: "Use the human naming here.", createdAtMs: 60 }),
+              reviewComment({ authorLogin: "greptile-apps[bot]", body: "I would rename this to use the bot naming.", createdAtMs: 65, isBot: true, id: "review-comment-2" }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please simplify this branch.", createdAtMs: 118, isBot: true, id: "review-comment-3" })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 120, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 80, waitingForGreptileReviewSinceMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("If human and Greptile feedback conflict, follow the human feedback first")
+    expect(pending?.feedbackMarkdown).toContain("freshness=\"carried-forward\"")
+    expect(pending?.feedbackMarkdown).toContain("Use the human naming here.")
+    expect(pending?.feedbackMarkdown).toContain("source=\"greptile\"")
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
+    expect(pending?.latestFeedbackAtMs).toBe(120)
+  })
+
+  it("limits carried-forward human threads while newer Greptile feedback is active", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          ...Array.from({ length: 7 }, (_, index) => ({
+            comments: [reviewComment({
+              authorLogin: "reviewer",
+              body: `Older human thread ${index + 1}`,
+              createdAtMs: (index + 1) * 10,
+              id: `review-comment-${index + 1}`,
+            })],
+            isCollapsed: false,
+            isResolved: false,
+          })),
+          {
+            comments: [reviewComment({
+              authorLogin: "greptile-apps[bot]",
+              body: "Please keep this helper narrow.",
+              createdAtMs: 85,
+              id: "review-comment-8",
+              isBot: true,
+            })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 90, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 75, waitingForGreptileReviewSinceMs: 80 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown.match(/priority="human" source="human" freshness="carried-forward"/g)).toHaveLength(5)
+    expect(pending?.feedbackMarkdown).toContain("Older human thread 7")
+    expect(pending?.feedbackMarkdown).toContain("Older human thread 3")
+    expect(pending?.feedbackMarkdown).not.toContain("Older human thread 2")
+    expect(pending?.feedbackMarkdown).not.toContain("Older human thread 1")
+  })
+
+  it("keeps human feedback that arrived before the latest Greptile request", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please keep the reviewer-approved wording.", createdAtMs: 90 })],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 120, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 80, waitingForGreptileReviewSinceMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("Please keep the reviewer-approved wording.")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.latestFeedbackAtMs).toBe(90)
+  })
+
+  it("omits stale Greptile scores when only human feedback is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please keep the reviewer-approved wording.", createdAtMs: 70 })],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 50, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 55, waitingForGreptileReviewSinceMs: 60 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("Please keep the reviewer-approved wording.")
+    expect(pending?.feedbackMarkdown).not.toContain("If human and Greptile feedback conflict")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 3/5")
+    expect(pending?.latestFeedbackAtMs).toBe(70)
+  })
+
+  it("treats a Greptile reply on a mixed thread as fresh Greptile feedback", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({ authorLogin: "reviewer", body: "Use the reviewer naming here.", createdAtMs: 10 }),
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "I still prefer the bot naming here.",
+                createdAtMs: 30,
+                id: "review-comment-2",
+                isBot: true,
+              }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({
+          authorLogin: "greptile-apps[bot]",
+          body: "Confidence: 4/5\n\nPlease keep the stale bot guidance.",
+          createdAtMs: 15,
+          id: "review-2",
+          isBot: true,
+        })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("If human and Greptile feedback conflict, follow the human feedback first")
+    expect(pending?.feedbackMarkdown).toContain("Use the reviewer naming here.")
+    expect(pending?.feedbackMarkdown).toContain("I still prefer the bot naming here.")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.latestFeedbackAtMs).toBe(30)
+  })
+
+  it("does not requeue the same mixed thread while waiting for the next Greptile pass", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({ authorLogin: "reviewer", body: "Use the reviewer naming here.", createdAtMs: 10 }),
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "I still prefer the bot naming here.",
+                createdAtMs: 30,
+                id: "review-comment-2",
+                isBot: true,
+              }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({
+          authorLogin: "greptile-apps[bot]",
+          body: "Confidence: 4/5\n\nPlease keep the stale bot guidance.",
+          createdAtMs: 15,
+          id: "review-2",
+          isBot: true,
+        })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 30, waitingForGreptileReviewSinceMs: 40 }),
+    })
+
     expect(pending).toBeNull()
+  })
+
+  it("surfaces the human reply first when Greptile opens a mixed thread", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "Use the bot naming here.",
+                createdAtMs: 10,
+                id: "review-comment-1",
+                isBot: true,
+              }),
+              reviewComment({
+                authorLogin: "reviewer",
+                body: "Keep the reviewer-approved naming instead.",
+                createdAtMs: 30,
+                id: "review-comment-2",
+              }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 5 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain('<comment author="reviewer" path="apps/cli/src/runner.ts" priority="human" source="human" freshness="fresh">')
+    expect(pending?.feedbackMarkdown).toContain('<comment author="greptile-apps[bot]" source="greptile">')
+    expect(pending?.feedbackMarkdown).not.toContain('<comment author="greptile-apps[bot]" path="apps/cli/src/runner.ts" priority="human" source="greptile" freshness="fresh">')
+  })
+
+  it("omits stale Greptile threads once the latest score is complete", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please keep the reviewer wording.", createdAtMs: 60 })],
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Old Greptile thread", createdAtMs: 10, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 5/5", createdAtMs: 30, isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 50 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).not.toContain("Old Greptile thread")
+  })
+
+  it("treats fresh Greptile thread activity without a fresh score as actionable", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [
+              reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 80, isBot: true }),
+              reviewComment({
+                authorLogin: "greptile-apps[bot]",
+                body: "The helper still needs the Greptile-approved name.",
+                createdAtMs: 120,
+                id: "review-comment-2",
+                isBot: true,
+              }),
+            ],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 80, isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.feedbackMarkdown).toContain("The helper still needs the Greptile-approved name.")
+    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 4/5")
+    expect(pending?.latestFeedbackAtMs).toBe(120)
+  })
+
+  it("treats unresolved Greptile threads as fresh when no score baseline exists yet", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Please rename this helper.", createdAtMs: 80, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest(),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Please rename this helper.")
+    expect(pending?.latestFeedbackAtMs).toBe(80)
+  })
+
+  it("omits stale Greptile threads when only a new failing score is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        reviewThreads: [
+          {
+            comments: [reviewComment({ authorLogin: "greptile-apps[bot]", body: "Old Greptile thread", createdAtMs: 80, isBot: true })],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 4/5", createdAtMs: 120, isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 90, waitingForGreptileReviewSinceMs: 100 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toEqual({ maximum: 5, value: 4 })
+    expect(pending?.feedbackMarkdown).toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).toContain("Confidence: 4/5")
+    expect(pending?.feedbackMarkdown).not.toContain("Old Greptile thread")
+    expect(pending?.latestFeedbackAtMs).toBe(120)
+  })
+
+  it("ignores empty review threads when building mixed feedback prompts", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please keep this helper focused.", createdAtMs: 60 })],
+        reviewThreads: [
+          {
+            comments: [],
+            isCollapsed: false,
+            isResolved: false,
+          },
+        ],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 20 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("Please keep this helper focused.")
   })
 
   it("suppresses duplicate review requests while Greptile has not responded yet", () => {
@@ -107,6 +472,28 @@ describe("review queue", () => {
     expect(pending).toBeNull()
   })
 
+  it("omits a stale Greptile score when only a later Greptile comment is fresh", () => {
+    const pending = findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [
+          comment({ authorLogin: "reviewer", body: "Keep the human-approved wording.", createdAtMs: 130 }),
+          comment({ authorLogin: "greptile-apps[bot]", body: "Please tighten the helper name.", createdAtMs: 120, id: "comment-2", isBot: true }),
+        ],
+        reviews: [review({ authorLogin: "greptile-apps[bot]", body: "Confidence: 3/5", createdAtMs: 80, id: "review-2", isBot: true })],
+      }),
+      pullRequest: pullRequest({ lastReviewedAtMs: 100, waitingForGreptileReviewSinceMs: 110 }),
+    })
+
+    expect(pending).not.toBeNull()
+    expect(pending?.reviewScore).toBeNull()
+    expect(pending?.feedbackMarkdown).toContain("## Human feedback (highest priority)")
+    expect(pending?.feedbackMarkdown).toContain("Keep the human-approved wording.")
+    expect(pending?.feedbackMarkdown).not.toContain("## Greptile feedback")
+    expect(pending?.feedbackMarkdown).not.toContain("Confidence: 3/5")
+    expect(pending?.feedbackMarkdown).not.toContain("Please tighten the helper name.")
+    expect(pending?.latestFeedbackAtMs).toBe(130)
+  })
+
   it("uses the latest Greptile review score when deciding whether follow-up work is needed", () => {
     const pending = findPendingPullRequestReview({
       feedback: feedback({
@@ -117,6 +504,28 @@ describe("review queue", () => {
       }),
       pullRequest: pullRequest({ waitingForGreptileReviewSinceMs: 20 }),
     })
+
+    expect(pending).toBeNull()
+  })
+
+  it("returns no pending review when fresh feedback timestamps are invalid", () => {
+    const buildPendingReview = () => findPendingPullRequestReview({
+      feedback: feedback({
+        comments: [comment({ authorLogin: "reviewer", body: "Please rename this helper.", createdAtMs: Number.POSITIVE_INFINITY })],
+      }),
+      pullRequest: pullRequest(),
+    })
+
+    const originalWarn = console.warn
+    console.warn = () => undefined
+
+    const pending = (() => {
+      try {
+        return buildPendingReview()
+      } finally {
+        console.warn = originalWarn
+      }
+    })()
 
     expect(pending).toBeNull()
   })

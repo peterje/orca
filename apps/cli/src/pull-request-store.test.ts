@@ -140,6 +140,7 @@ describe("PullRequestStore", () => {
         yield* withStore((store) =>
           store.upsert({
             branch: "orca/eng-1-example-issue",
+            greptileCompletedAtMs: 1_700_000_000_050,
             issueDescription: "Example issue description",
             issueId: "issue-1",
             issueIdentifier: "ENG-1",
@@ -161,6 +162,7 @@ describe("PullRequestStore", () => {
         const records = yield* withStore((store) => store.list)
 
         expect(records).toHaveLength(1)
+        expect(records[0]?.greptileCompletedAtMs).toBeNull()
         expect(records[0]?.lastReviewedAtMs).toBe(1_700_000_000_100)
         expect(records[0]?.waitingForGreptileReviewSinceMs).toBe(1_700_000_000_200)
       }),

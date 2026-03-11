@@ -48,7 +48,7 @@ describe("PromptGen", () => {
       expect(result.promptFileContents).toContain("- Make the `**summary**` section a readable narrative that explains what changed and why it matters, and avoid file-by-file implementation details.")
     }).pipe(Effect.provide(makePromptGenLayer())))
 
-  it.effect("guides review follow-up around Greptile feedback", () =>
+  it.effect("guides review follow-up without implying missing feedback sources", () =>
     Effect.gen(function* () {
       const promptGen = yield* PromptGen
       const result = yield* promptGen.buildReviewPrompt({
@@ -62,10 +62,11 @@ describe("PromptGen", () => {
         verify: ["bun run check", "bun run test"],
       })
 
-      expect(result.prompt).toContain("Greptile")
-      expect(result.promptFileContents).toContain("## Greptile review feedback")
-      expect(result.promptFileContents).toContain("- Address the requested Greptile feedback and keep the existing pull request moving.")
-      expect(result.promptFileContents).toContain("- Have the existing branch ready for another Greptile review pass.")
+      expect(result.prompt).toContain("pull request review feedback")
+      expect(result.promptFileContents).toContain("## Pull request review feedback")
+      expect(result.promptFileContents).toContain("- Address the requested pull request feedback. When both human and Greptile feedback are present, follow the human direction first when they disagree.")
+      expect(result.promptFileContents).not.toContain("Address the requested human and Greptile feedback together")
+      expect(result.promptFileContents).toContain("- Have the existing branch ready for another review pass.")
       expect(result.promptFileContents).toContain("- Use a conventional commit message every time you create a commit.")
       expect(result.promptFileContents).toContain("- If you update the PR description, keep the same lowercase narrative format with `**closes**`, `**summary**`, and `**verification**`.")
     }).pipe(Effect.provide(makePromptGenLayer())))
@@ -87,6 +88,7 @@ describe("PromptGen", () => {
       expect(result.prompt).toContain("merge conflicts")
       expect(result.promptFileContents).toContain("## Merge conflict context")
       expect(result.promptFileContents).toContain("attempted a merge")
+      expect(result.promptFileContents).toContain("- Have the existing branch ready for another review pass.")
       expect(result.promptFileContents).toContain("apps/cli/src/runner.ts")
       expect(result.promptFileContents).toContain("- Resolve all remaining merge conflicts before finishing.")
       expect(result.promptFileContents).toContain("- Use a conventional commit message every time you create a commit.")

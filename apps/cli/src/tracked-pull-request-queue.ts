@@ -68,13 +68,14 @@ export const summarizeTrackedPullRequestQueue = (
       continue
     }
 
-    if (!isTrackedForGreptileLoop(trackedPullRequest.pullRequest)) {
-      continue
-    }
-
     const pendingReview = findPendingPullRequestReview(trackedPullRequest)
     if (pendingReview !== null) {
       pendingReviews.push(pendingReview)
+      continue
+    }
+
+    if (!isTrackedForGreptileLoop(trackedPullRequest.pullRequest)) {
+      assertConsistentGreptileLoopState(trackedPullRequest.pullRequest)
       continue
     }
 
@@ -100,6 +101,14 @@ const mergeStatesNeedingBaseSync = new Set(["BEHIND", "DIRTY"])
 
 const needsBaseSync = (feedback: PullRequestFeedback) =>
   mergeStatesNeedingBaseSync.has(feedback.mergeStateStatus.toUpperCase())
+
+const assertConsistentGreptileLoopState = (pullRequest: OrcaManagedPullRequest) => {
+  if (pullRequest.greptileCompletedAtMs !== null && pullRequest.waitingForGreptileReviewSinceMs !== null) {
+    throw new Error(
+      `Pull request ${pullRequest.repo}#${pullRequest.prNumber} is marked greptile-complete but still waiting for greptile review.`,
+    )
+  }
+}
 
 const isTrackedForGreptileLoop = (pullRequest: OrcaManagedPullRequest) =>
   pullRequest.greptileCompletedAtMs === null

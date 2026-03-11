@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 import type { PullRequestFeedback } from "./github.ts"
 import { OrcaManagedPullRequest } from "./pull-request-store.ts"
-import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
+import { loadTrackedPullRequestQueue, summarizeTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 
 describe("tracked pull request queue", () => {
   it.effect("prunes stale tracked pull requests and keeps waiting and follow-up states separate", () =>
@@ -59,7 +59,6 @@ describe("tracked pull request queue", () => {
               lastReviewedAtMs: 15,
               prNumber: 47,
               prUrl: "https://github.com/peterje/orca/pull/47",
-              waitingForGreptileReviewSinceMs: 10,
             }),
           ]),
           remove: ({ prNumber, repo }) =>
@@ -75,6 +74,65 @@ describe("tracked pull request queue", () => {
       expect(queue.waitingForReviewPullRequests).toEqual([])
       expect(queue.stalePullRequests).toEqual([])
       expect(removedPullRequests).toEqual([])
+    }))
+
+  it.effect("creates pending review work for completed pull requests with unresolved human feedback", () =>
+    Effect.gen(function* () {
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileCompletedAtMs: 30,
+              issueId: "issue-8",
+              issueIdentifier: "ENG-8",
+              lastReviewedAtMs: 20,
+              prNumber: 50,
+              prUrl: "https://github.com/peterje/orca/pull/50",
+            }),
+          ]),
+          remove: () => Effect.succeed(false),
+        },
+      })
+
+      expect(queue.pendingReviews.map((review) => review.pullRequest.issueIdentifier)).toEqual(["ENG-8"])
+      expect(queue.waitingForReviewPullRequests).toEqual([])
+    }))
+
+  it.effect("re-enters completed pull requests when human and Greptile feedback both arrive", () =>
+    Effect.gen(function* () {
+      const queue = yield* loadTrackedPullRequestQueue({
+        github: {
+          readPullRequestFeedback: ({ pullRequestNumber, repo }) =>
+            Effect.succeed(
+              feedbackByKey[`${repo}#${pullRequestNumber}`]
+              ?? pullRequestFeedback({ number: pullRequestNumber, url: `https://github.com/${repo}/pull/${pullRequestNumber}` }),
+            ),
+        },
+        pullRequestStore: {
+          list: Effect.succeed([
+            trackedPullRequest({
+              greptileCompletedAtMs: 30,
+              issueId: "issue-9",
+              issueIdentifier: "ENG-9",
+              lastReviewedAtMs: 20,
+              prNumber: 51,
+              prUrl: "https://github.com/peterje/orca/pull/51",
+            }),
+          ]),
+          remove: () => Effect.succeed(false),
+        },
+      })
+
+      expect(queue.pendingReviews.map((review) => review.pullRequest.issueIdentifier)).toEqual(["ENG-9"])
+      expect(queue.pendingReviews[0]?.reviewScore).toEqual({ maximum: 5, value: 4 })
+      expect(queue.waitingForReviewPullRequests).toEqual([])
     }))
 
   it.effect("prunes terminal pull requests that were closed or merged before reload", () =>
@@ -145,6 +203,24 @@ describe("tracked pull request queue", () => {
       expect(queue.pendingReviews).toEqual([])
       expect(queue.waitingForReviewPullRequests).toEqual([])
     }))
+
+  it("throws when a completed pull request still claims to be waiting for Greptile", () => {
+    expect(() =>
+      summarizeTrackedPullRequestQueue([
+        {
+          feedback: pullRequestFeedback({ number: 52, url: "https://github.com/peterje/orca/pull/52" }),
+          pullRequest: trackedPullRequest({
+            greptileCompletedAtMs: 30,
+            issueId: "issue-10",
+            issueIdentifier: "ENG-10",
+            prNumber: 52,
+            prUrl: "https://github.com/peterje/orca/pull/52",
+            waitingForGreptileReviewSinceMs: 20,
+          }),
+        },
+      ]),
+    ).toThrow("marked greptile-complete but still waiting for greptile review")
+  })
 })
 
 const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
@@ -193,7 +269,9 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
     reviews: [
       {
         authorLogin: "greptile-apps[bot]",
-        body: "Confidence: 4/5",
+        // 5/5 keeps this fixture out of pendingReviews after the queue checks for
+        // fresh review work before it decides whether the PR is still waiting on Greptile.
+        body: "Confidence: 5/5",
         createdAtMs: 24,
         id: "review-47",
         isBot: true,
@@ -204,6 +282,44 @@ const feedbackByKey: Readonly<Record<string, PullRequestFeedback>> = {
   }),
   "peterje/orca#48": pullRequestFeedback({ number: 48, state: "CLOSED", url: "https://github.com/peterje/orca/pull/48" }),
   "peterje/orca#49": pullRequestFeedback({ number: 49, state: "MERGED", url: "https://github.com/peterje/orca/pull/49" }),
+  "peterje/orca#50": pullRequestFeedback({
+    comments: [
+      {
+        authorLogin: "reviewer",
+        body: "Please keep the human-approved wording here.",
+        createdAtMs: 40,
+        id: "comment-50",
+        isBot: false,
+        updatedAtMs: 40,
+      },
+    ],
+    number: 50,
+    url: "https://github.com/peterje/orca/pull/50",
+  }),
+  "peterje/orca#51": pullRequestFeedback({
+    comments: [
+      {
+        authorLogin: "reviewer",
+        body: "Keep the reviewer-approved copy.",
+        createdAtMs: 40,
+        id: "comment-51",
+        isBot: false,
+        updatedAtMs: 40,
+      },
+    ],
+    number: 51,
+    reviews: [
+      {
+        authorLogin: "greptile-apps[bot]",
+        body: "Confidence: 4/5",
+        createdAtMs: 45,
+        id: "review-51",
+        isBot: true,
+        updatedAtMs: 45,
+      },
+    ],
+    url: "https://github.com/peterje/orca/pull/51",
+  }),
 }
 
 const trackedPullRequest = (overrides: Partial<typeof OrcaManagedPullRequest.Type> & Pick<typeof OrcaManagedPullRequest.Type, "issueId" | "issueIdentifier" | "prNumber" | "prUrl">) =>
