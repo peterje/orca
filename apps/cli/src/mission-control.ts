@@ -49,7 +49,11 @@ export const MissionControlLive = Effect.gen(function* () {
   const snapshot = Effect.gen(function* () {
     const config = yield* repoConfig.read
     const activeRun = yield* runState.current.pipe(Effect.mapError(toMissionControlError))
-    const trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({ github, pullRequestStore }).pipe(
+    const trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({
+      github,
+      maxGreptileReviewRequests: config.maxGreptileReviewRequests,
+      pullRequestStore,
+    }).pipe(
       Effect.mapError(toMissionControlError),
     )
     const currentIssueId = activeRun?.issueId ?? null

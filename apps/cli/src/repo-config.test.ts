@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   defaultGreptilePollIntervalSeconds,
+  defaultMaxGreptileReviewRequests,
   defaultMaxWaitingPullRequests,
   RepoConfig,
   RepoConfigLayer,
@@ -48,10 +49,12 @@ describe("RepoConfig", () => {
 
         expect(config.greptilePollIntervalSeconds).toBe(defaultGreptilePollIntervalSeconds)
         expect(config.linearWorkspace).toBe("peteredm")
+        expect(config.maxGreptileReviewRequests).toBe(defaultMaxGreptileReviewRequests)
         expect(config.maxWaitingPullRequests).toBe(defaultMaxWaitingPullRequests)
         expect(JSON.parse(readFileSync(join(tempDirectory, ".orca/repo.json"), "utf8"))).toMatchObject({
           greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
           linearWorkspace: "peteredm",
+          maxGreptileReviewRequests: defaultMaxGreptileReviewRequests,
           maxWaitingPullRequests: defaultMaxWaitingPullRequests,
         })
       }).pipe(Effect.provide(repoConfigLayer)),
@@ -83,6 +86,7 @@ describe("RepoConfig", () => {
         const config = yield* repoConfig.read
 
         expect(config.greptilePollIntervalSeconds).toBe(defaultGreptilePollIntervalSeconds)
+        expect(config.maxGreptileReviewRequests).toBe(defaultMaxGreptileReviewRequests)
         expect(config.maxWaitingPullRequests).toBe(defaultMaxWaitingPullRequests)
       }).pipe(Effect.provide(repoConfigLayer)),
     ))

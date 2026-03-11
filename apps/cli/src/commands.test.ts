@@ -546,6 +546,7 @@ const makeRepoConfigData = (overrides: { readonly linearLabel?: string | undefin
     greptilePollIntervalSeconds: 30,
     linearLabel: overrides.linearLabel ?? "Orca",
     ...(overrides.linearWorkspace === undefined ? {} : { linearWorkspace: overrides.linearWorkspace }),
+    maxGreptileReviewRequests: 4,
     maxWaitingPullRequests: 4,
     repo: "peterje/orca",
     setup: ["bun install"],

@@ -230,12 +230,16 @@ describe("review queue", () => {
 
 const pullRequest = (overrides?: Partial<{
   readonly greptileCompletedAtMs: number | null
+  readonly greptileReviewLimitReachedAtMs: number | null
+  readonly greptileReviewRequestCount: number
   readonly lastReviewedAtMs: number | null
   readonly waitingForGreptileReviewSinceMs: number | null
 }>) => ({
   branch: "orca/eng-1",
   createdAtMs: 1,
   greptileCompletedAtMs: overrides?.greptileCompletedAtMs ?? null,
+  greptileReviewLimitReachedAtMs: overrides?.greptileReviewLimitReachedAtMs ?? null,
+  greptileReviewRequestCount: overrides?.greptileReviewRequestCount ?? 1,
   issueDescription: "",
   issueId: "issue-1",
   issueIdentifier: "ENG-1",

@@ -8,7 +8,7 @@ import { PullRequestStore, PullRequestStoreError, type OrcaManagedPullRequest } 
 import { RepoConfig, RepoConfigData, RepoConfigError } from "./repo-config.ts"
 import { findLatestGreptileReviewScore, type PendingPullRequestReview } from "./review-queue.ts"
 import { RunState, RunStateBusyError, RunStateError, formatActiveRunStage, type ActiveRunStage } from "./run-state.ts"
-import { loadTrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
+import { loadTrackedPullRequestQueue, type TrackedPullRequestQueue } from "./tracked-pull-request-queue.ts"
 import { VerificationError, Verifier } from "./verifier.ts"
 import { Worktree, WorktreeError, makeRemoteBaseRef, slugifyIssueTitle, type ManagedWorktree } from "./worktree.ts"
 
@@ -78,6 +78,7 @@ type FinalizedPullRequest = {
 
 type WaitingForGreptileReviewPullRequest = OrcaManagedPullRequest & {
   readonly greptileCompletedAtMs: null
+  readonly greptileReviewLimitReachedAtMs: null
   readonly waitingForGreptileReviewSinceMs: number
 }
 
@@ -104,9 +105,21 @@ export const RunnerLive = Effect.gen(function* () {
 
   const selectNextWork = Effect.gen(function* () {
     const config = yield* repoConfig.read
-    const trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({ github, pullRequestStore }).pipe(
+    const trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({
+      github,
+      maxGreptileReviewRequests: config.maxGreptileReviewRequests,
+      pullRequestStore,
+    }).pipe(
       Effect.mapError(toRunnerFailure),
     )
+    return yield* selectNextWorkFromQueue({ config, trackedPullRequestQueue })
+  })
+
+  const selectNextWorkFromQueue = (options: {
+    readonly config: RepoConfigData
+    readonly trackedPullRequestQueue: TrackedPullRequestQueue
+  }) => Effect.gen(function* () {
+    const { config, trackedPullRequestQueue } = options
     const trackedIssueIds = new Set(trackedPullRequestQueue.openPullRequests.map((pullRequest) => pullRequest.issueId))
     const pullRequestNeedingBaseSync = trackedPullRequestQueue.pullRequestsNeedingBaseSync[0]
 
@@ -235,7 +248,29 @@ export const RunnerLive = Effect.gen(function* () {
   )
 
   const runNext = Effect.gen(function* () {
-    const selected = yield* selectNextWork
+    const config = yield* repoConfig.read.pipe(Effect.mapError(toRunnerFailure))
+    let trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({
+      github,
+      maxGreptileReviewRequests: config.maxGreptileReviewRequests,
+      pullRequestStore,
+    }).pipe(Effect.mapError(toRunnerFailure))
+
+    if (trackedPullRequestQueue.exhaustedPullRequests.length > 0) {
+      yield* stopExhaustedGreptileLoops({
+        linear,
+        maxGreptileReviewRequests: config.maxGreptileReviewRequests,
+        pullRequestStore,
+        pullRequests: trackedPullRequestQueue.exhaustedPullRequests,
+      })
+
+      trackedPullRequestQueue = yield* loadTrackedPullRequestQueue({
+        github,
+        maxGreptileReviewRequests: config.maxGreptileReviewRequests,
+        pullRequestStore,
+      }).pipe(Effect.mapError(toRunnerFailure))
+    }
+
+    const selected = yield* selectNextWorkFromQueue({ config, trackedPullRequestQueue })
     if (Option.isNone(selected)) {
       return yield* Effect.fail(
         new RunnerNoWorkError({ message: "No pending pull request reviews or actionable Orca issues are currently available." }),
@@ -302,6 +337,35 @@ export class RunnerFailure extends Data.TaggedError("RunnerFailure")<{
 export class RunnerNoWorkError extends Data.TaggedError("RunnerNoWorkError")<{
   readonly message: string
 }> {}
+
+const stopExhaustedGreptileLoops = (options: {
+  readonly linear: LinearService
+  readonly maxGreptileReviewRequests: number
+  readonly pullRequestStore: typeof PullRequestStore.Service
+  readonly pullRequests: ReadonlyArray<OrcaManagedPullRequest>
+}) =>
+  Effect.forEach(
+    options.pullRequests,
+    (pullRequest) =>
+      Effect.gen(function* () {
+        yield* options.linear.commentOnIssue({
+          body: [
+            `Orca stopped the Greptile loop for ${pullRequest.issueIdentifier} after ${options.maxGreptileReviewRequests} review requests without reaching 5/5.`,
+            "",
+            "- next step: break the work into smaller changes or retry with a fresh pull request.",
+            `- PR: ${pullRequest.prUrl}`,
+          ].join("\n"),
+          issueId: pullRequest.issueId,
+        }).pipe(Effect.mapError(toRunnerFailure))
+
+        yield* options.pullRequestStore.markGreptileReviewLimitReached({
+          prNumber: pullRequest.prNumber,
+          reachedAtMs: Date.now(),
+          repo: pullRequest.repo,
+        }).pipe(Effect.mapError(toRunnerFailure))
+      }),
+    { concurrency: 1, discard: true },
+  )
 
 const runImplementation = (options: {
   readonly agentRunner: typeof AgentRunner.Service
@@ -1008,7 +1072,9 @@ const makeLinearIssueReference = (issueIdentifier: string, workspaceSlug: string
 const isWaitingForGreptileReview = (
   pullRequest: OrcaManagedPullRequest,
 ): pullRequest is WaitingForGreptileReviewPullRequest =>
-  pullRequest.greptileCompletedAtMs === null && pullRequest.waitingForGreptileReviewSinceMs !== null
+  pullRequest.greptileCompletedAtMs === null
+  && pullRequest.greptileReviewLimitReachedAtMs === null
+  && pullRequest.waitingForGreptileReviewSinceMs !== null
 const formatIssueLabel = (issueIdentifier: string, issueTitle: string) =>
   issueTitle.trim().length > 0 ? `${issueIdentifier} ${issueTitle}` : issueIdentifier
 
