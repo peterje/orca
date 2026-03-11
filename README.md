@@ -27,7 +27,9 @@ bun install
 bun run orca init --repo owner/name --linear-workspace peteredm
 ```
 
-This creates repo-local Orca config in `./.orca/repo.json` and infers verification commands from `package.json`.
+This creates a repo-owned `WORKFLOW.md` scaffold and infers verification commands from `package.json`.
+
+Set `ORCA_WORKFLOW_PATH` if you want Orca to read or write a workflow file somewhere other than `./WORKFLOW.md`.
 
 `--linear-workspace` is optional. When set, Orca only considers issues from that Linear workspace slug for `orca issues list`, `orca status`, `orca serve`, and `orca run next`.
 Before Orca starts maintaining tracked pull requests, configure the repo-local weave merge driver:
@@ -54,7 +56,7 @@ bun run orca issues list
 
 The planner includes:
 
-- issues in the configured Linear workspace, when `linearWorkspace` is set in `./.orca/repo.json`
+- issues in the configured Linear workspace, when `linearWorkspace` is set in `WORKFLOW.md`
 - issues tagged with the configured Linear label (default `Orca`)
 - incomplete blockers of tagged issues
 - incomplete child issues needed to unblock tagged work
@@ -95,7 +97,7 @@ In execution mode, Orca fetches the latest `origin/<base-branch>`, creates a git
 
 ## Command guide
 
-- `bun run orca init` - create or update repo-local Orca config, including optional Linear workspace scoping
+- `bun run orca init` - create or update the repo-owned workflow file, including optional Linear workspace scoping
 - `bun run orca linear auth` - authenticate with Linear via OAuth PKCE
 - `bun run orca issues list` - show actionable and blocked Orca work
 - `bun run orca status` - show the current mission-control snapshot

@@ -45,7 +45,7 @@ export const commandInit = Command.make(
     })
     const path = yield* repoConfig.configPath
 
-    yield* Console.log(`Initialized Orca repo config at ${path}.`)
+    yield* Console.log(`Initialized Orca workflow at ${path}.`)
     yield* Console.log(`Repo: ${config.repo}`)
     yield* Console.log(`Base branch: ${config.baseBranch}`)
     yield* Console.log(`Agent: ${config.agent}`)
@@ -55,4 +55,4 @@ export const commandInit = Command.make(
     yield* Console.log(`Max waiting PRs: ${config.maxWaitingPullRequests}`)
     yield* Console.log(`Verification: ${config.verify.length > 0 ? config.verify.join(", ") : "none configured"}`)
   }),
-).pipe(Command.withDescription("Bootstrap repo-local Orca config under ./.orca/."))
+).pipe(Command.withDescription("Bootstrap a repo-owned Orca workflow file."))
