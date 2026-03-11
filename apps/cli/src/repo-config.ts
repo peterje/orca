@@ -265,6 +265,7 @@ export const RepoConfigLive = Effect.gen(function* () {
 
   const write = (config: RepoConfigData) =>
     Effect.gen(function* () {
+      yield* validateDispatchCriticalConfig(config)
       const path = yield* resolveWorkflowPath()
 
       yield* refreshSemaphore.withPermit(Effect.gen(function* () {
@@ -522,11 +523,11 @@ const validateDispatchCriticalConfig = (config: RepoConfigData) => {
   if (config.agentArgs.some((argument) => argument.trim().length === 0)) {
     problems.push('"agentArgs" entries must not be blank.')
   }
-  if (config.setup.some((command) => command.trim().length === 0)) {
-    problems.push('"setup" entries must not be blank.')
+  if (config.setup.some((command) => command.trim().length === 0 || hasLineBreak(command))) {
+    problems.push('"setup" entries must not be blank or contain newlines.')
   }
-  if (config.verify.some((command) => command.trim().length === 0)) {
-    problems.push('"verify" entries must not be blank.')
+  if (config.verify.some((command) => command.trim().length === 0 || hasLineBreak(command))) {
+    problems.push('"verify" entries must not be blank or contain newlines.')
   }
 
   return problems.length === 0
@@ -536,6 +537,8 @@ const validateDispatchCriticalConfig = (config: RepoConfigData) => {
         message: `Invalid workflow config: ${problems.join(" ")}`,
       }))
 }
+
+const hasLineBreak = (value: string) => /[\n\r]/.test(value)
 
 const renderWorkflowDocument = (config: RepoConfigData, promptTemplate: string) => {
   const frontMatter = stringifyYaml(toWorkflowFrontMatter(config)).trimEnd()

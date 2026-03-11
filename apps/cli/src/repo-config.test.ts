@@ -364,6 +364,56 @@ describe("RepoConfig", () => {
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
+  it.effect("rejects embedded newlines in setup and verify commands during workflow validation", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: [
+            'setup: ["bun install\\n bun run check"]',
+            'verify: ["bun run check\\n bun run test"]',
+            "repo: owner/name",
+          ].join("\n"),
+          prompt: "Command strings should stay single-line",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const error = yield* repoConfig.read.pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(RepoConfigError)
+        expect(error.code).toBe("workflow-config-validation-failed")
+        expect(error.message).toContain('"setup" entries must not be blank or contain newlines.')
+        expect(error.message).toContain('"verify" entries must not be blank or contain newlines.')
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
+
+  it.effect("rejects writing newline-containing commands without mutating the workflow file", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        const workflowPath = join(tempDirectory, defaultWorkflowFileName)
+        writeWorkflowFile(workflowPath, {
+          frontMatter: [
+            "repo: owner/name",
+            'setup: ["bun install"]',
+          ].join("\n"),
+          prompt: "Keep this workflow intact",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const config = yield* repoConfig.read
+        const initialWorkflowContent = readFileSync(workflowPath, "utf8")
+
+        const error = yield* repoConfig.write(new RepoConfigData({
+          ...config,
+          setup: ["bun install\n bun run check"],
+        })).pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(RepoConfigError)
+        expect(error.code).toBe("workflow-config-validation-failed")
+        expect(error.message).toContain('"setup" entries must not be blank or contain newlines.')
+        expect(readFileSync(workflowPath, "utf8")).toBe(initialWorkflowContent)
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
+
   it.effect("workflow front matter getters resolve defaults, env indirection, and home-relative paths", () =>
     withEnv(
       {
@@ -384,13 +434,13 @@ describe("RepoConfig", () => {
       }),
     ))
 
-  it.effect("parses double-quoted yaml escape sequences", () =>
+  it.effect("parses double-quoted yaml escape sequences in unknown workflow fields", () =>
     withTempCwd((tempDirectory) =>
       Effect.gen(function* () {
         writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
           frontMatter: [
             'future-setting: "hello\\nworld"',
-            'verify: ["bun run check\\n bun run test"]',
+            'future-list: ["bun run check\\n bun run test"]',
             "repo: owner/name",
           ].join("\n"),
           prompt: "Escaped values should round-trip",
@@ -398,19 +448,9 @@ describe("RepoConfig", () => {
 
         const repoConfig = yield* RepoConfig
         const workflow = yield* repoConfig.document
-        const config = yield* repoConfig.read
 
         expect(workflow.config.raw["future-setting"]).toBe("hello\nworld")
-        expect(workflow.config.raw.verify).toEqual(["bun run check\n bun run test"])
-
-        yield* repoConfig.write(new RepoConfigData({
-          ...config,
-          verify: ["bun run check\n bun run test"],
-        }))
-
-        const reloadedWorkflow = yield* repoConfig.document
-
-        expect(reloadedWorkflow.config.raw.verify).toEqual(["bun run check\n bun run test"])
+        expect(workflow.config.raw["future-list"]).toEqual(["bun run check\n bun run test"])
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
