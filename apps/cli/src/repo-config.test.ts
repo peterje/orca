@@ -398,9 +398,19 @@ describe("RepoConfig", () => {
 
         const repoConfig = yield* RepoConfig
         const workflow = yield* repoConfig.document
+        const config = yield* repoConfig.read
 
         expect(workflow.config.raw["future-setting"]).toBe("hello\nworld")
         expect(workflow.config.raw.verify).toEqual(["bun run check\n bun run test"])
+
+        yield* repoConfig.write(new RepoConfigData({
+          ...config,
+          verify: ["bun run check\n bun run test"],
+        }))
+
+        const reloadedWorkflow = yield* repoConfig.document
+
+        expect(reloadedWorkflow.config.raw.verify).toEqual(["bun run check\n bun run test"])
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 

@@ -955,7 +955,7 @@ const stringifyYamlScalar = (value: unknown) => {
 }
 
 const shouldQuoteYamlString = (value: string) =>
-  value.length === 0 || /[:#\[\]{}]|^[-?]|^\s|\s$/.test(value)
+  value.length === 0 || /[:#\[\]{}]|^[-?]|^\s|\s$|[\n\r]/.test(value)
 
 const isYamlComplexValue = (value: unknown) =>
   Array.isArray(value) || isWorkflowMap(value)
