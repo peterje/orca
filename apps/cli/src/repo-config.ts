@@ -520,8 +520,8 @@ const validateDispatchCriticalConfig = (config: RepoConfigData) => {
   if (config.stallTimeoutMinutes <= 0) {
     problems.push('"stallTimeoutMinutes" must be greater than 0.')
   }
-  if (config.agentArgs.some((argument) => argument.trim().length === 0)) {
-    problems.push('"agentArgs" entries must not be blank.')
+  if (config.agentArgs.some((argument) => argument.trim().length === 0 || hasLineBreak(argument))) {
+    problems.push('"agentArgs" entries must not be blank or contain newlines.')
   }
   if (config.setup.some((command) => command.trim().length === 0 || hasLineBreak(command))) {
     problems.push('"setup" entries must not be blank or contain newlines.')

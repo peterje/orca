@@ -360,15 +360,16 @@ describe("RepoConfig", () => {
 
         expect(error).toBeInstanceOf(RepoConfigError)
         expect(error.code).toBe("workflow-config-validation-failed")
-        expect(error.message).toContain('"agentArgs" entries must not be blank.')
+        expect(error.message).toContain('"agentArgs" entries must not be blank or contain newlines.')
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
-  it.effect("rejects embedded newlines in setup and verify commands during workflow validation", () =>
+  it.effect("rejects embedded newlines in agent args, setup, and verify entries during workflow validation", () =>
     withTempCwd((tempDirectory) =>
       Effect.gen(function* () {
         writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
           frontMatter: [
+            'agent-args: ["--prompt\\ncontinue"]',
             'setup: ["bun install\\n bun run check"]',
             'verify: ["bun run check\\n bun run test"]',
             "repo: owner/name",
@@ -381,6 +382,7 @@ describe("RepoConfig", () => {
 
         expect(error).toBeInstanceOf(RepoConfigError)
         expect(error.code).toBe("workflow-config-validation-failed")
+        expect(error.message).toContain('"agentArgs" entries must not be blank or contain newlines.')
         expect(error.message).toContain('"setup" entries must not be blank or contain newlines.')
         expect(error.message).toContain('"verify" entries must not be blank or contain newlines.')
       }).pipe(Effect.provide(repoConfigLayer)),
