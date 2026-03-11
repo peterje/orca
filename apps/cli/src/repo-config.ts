@@ -266,9 +266,9 @@ export const RepoConfigLive = Effect.gen(function* () {
   const write = (config: RepoConfigData) =>
     Effect.gen(function* () {
       yield* validateDispatchCriticalConfig(config)
-      const path = yield* resolveWorkflowPath()
 
       yield* refreshSemaphore.withPermit(Effect.gen(function* () {
+        const path = yield* resolveWorkflowPath()
         const promptTemplate = yield* resolvePromptTemplateForWrite(fs, cache, path)
         const payload = renderWorkflowDocument(config, promptTemplate)
 
@@ -371,6 +371,10 @@ const resolvePromptTemplateForWrite = (
 ) =>
   Effect.gen(function* () {
     const cached = yield* Ref.get(cache)
+
+    // Cold-cache writes still read the current workflow inside the write permit so
+    // repo-owned prompt text survives config-only rewrites. We do not cache that
+    // pre-write state here because the caller is about to replace it immediately.
     const sourceResult = yield* Effect.result(readWorkflowSource(fs, path))
 
     if (Result.isFailure(sourceResult)) {
@@ -654,12 +658,12 @@ const parseYamlObject = (
       return { value, nextLineIndex: nextContentLineIndex }
     }
 
-    const separatorIndex = content.indexOf(":")
+    const separatorIndex = findYamlMappingSeparator(content)
     if (separatorIndex === -1) {
       throw new Error(`invalid yaml mapping at line ${nextContentLineIndex + 1}`)
     }
 
-    const key = content.slice(0, separatorIndex).trim()
+    const key = parseYamlKey(content.slice(0, separatorIndex), nextContentLineIndex + 1)
     if (key.length === 0) {
       throw new Error(`yaml keys must not be blank at line ${nextContentLineIndex + 1}`)
     }
@@ -769,6 +773,85 @@ const parseYamlDoubleQuotedString = (raw: string) => {
   } catch (cause) {
     throw new Error(`invalid double-quoted yaml string: ${String(cause)}`)
   }
+}
+
+const parseYamlKey = (raw: string, lineNumber: number) => {
+  const trimmed = raw.trim()
+  if (trimmed.length === 0) {
+    throw new Error(`yaml keys must not be blank at line ${lineNumber}`)
+  }
+
+  if (trimmed.startsWith('"')) {
+    if (!trimmed.endsWith('"')) {
+      throw new Error(`unterminated double-quoted yaml key at line ${lineNumber}`)
+    }
+    return parseYamlDoubleQuotedString(trimmed)
+  }
+
+  if (trimmed.startsWith("'")) {
+    if (!trimmed.endsWith("'")) {
+      throw new Error(`unterminated single-quoted yaml key at line ${lineNumber}`)
+    }
+    return trimmed.slice(1, -1).replace(/''/g, "'")
+  }
+
+  if (trimmed.includes('"') || trimmed.includes("'")) {
+    throw new Error(`invalid yaml key at line ${lineNumber}`)
+  }
+
+  return trimmed
+}
+
+const findYamlMappingSeparator = (content: string) => {
+  let inDoubleQuotes = false
+  let inSingleQuotes = false
+
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index]!
+
+    if (inDoubleQuotes) {
+      if (character === "\\") {
+        index += 1
+        continue
+      }
+      if (character === '"') {
+        inDoubleQuotes = false
+      }
+      continue
+    }
+
+    if (inSingleQuotes) {
+      if (character === "'") {
+        if (content[index + 1] === "'") {
+          index += 1
+          continue
+        }
+        inSingleQuotes = false
+      }
+      continue
+    }
+
+    if (character === '"') {
+      inDoubleQuotes = true
+      continue
+    }
+    if (character === "'") {
+      inSingleQuotes = true
+      continue
+    }
+    if (character === ":") {
+      const nextCharacter = content[index + 1]
+      if (nextCharacter === undefined || /\s/.test(nextCharacter)) {
+        return index
+      }
+    }
+  }
+
+  if (inDoubleQuotes || inSingleQuotes) {
+    throw new Error("unterminated yaml key")
+  }
+
+  return -1
 }
 
 const stripInlineYamlComment = (raw: string) => {

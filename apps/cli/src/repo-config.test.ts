@@ -217,6 +217,83 @@ describe("RepoConfig", () => {
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
+  it.effect("writes to the latest workflow path after env changes while waiting on refresh", () =>
+    withTempCwd((tempDirectory) =>
+      withEnv(
+        { [workflowPathEnvironmentVariable]: `./${defaultWorkflowFileName}` },
+        (() => {
+          const firstPath = join(tempDirectory, defaultWorkflowFileName)
+          const secondPath = join(tempDirectory, "config", "custom-workflow.md")
+          const readStarted = makeSignal()
+          const releaseRead = makeSignal()
+          let shouldBlockNextRead = true
+
+          const instrumentedFileSystem = {
+            ...makeTestFileSystem(),
+            readFileString: (path: string) =>
+              shouldBlockNextRead
+                ? Effect.gen(function* () {
+                    shouldBlockNextRead = false
+                    readStarted.resolve()
+                    yield* Effect.promise(() => releaseRead.promise)
+                    return readFileSync(path, "utf8")
+                  })
+                : Effect.sync(() => readFileSync(path, "utf8")),
+          } as unknown as FileSystem.FileSystem
+
+          return Effect.gen(function* () {
+            writeWorkflowFile(firstPath, {
+              frontMatter: "linear-label: First\nrepo: owner/first",
+              prompt: "First prompt",
+            })
+            writeWorkflowFile(secondPath, {
+              frontMatter: "linear-label: Second\nrepo: owner/second",
+              prompt: "Second prompt",
+            })
+
+            const repoConfig = yield* RepoConfig
+
+            yield* Effect.all([
+              repoConfig.read,
+              Effect.promise(() => readStarted.promise).pipe(
+                Effect.tap(() => Effect.sync(() => {
+                  process.env[workflowPathEnvironmentVariable] = "./config/custom-workflow.md"
+                  releaseRead.resolve()
+                })),
+                Effect.flatMap(() => repoConfig.write(new RepoConfigData({
+                  agent: "opencode",
+                  agentArgs: [],
+                  agentTimeoutMinutes: 45,
+                  baseBranch: "main",
+                  branchPrefix: "orca",
+                  cleanupWorktreeOnSuccess: true,
+                  draftPr: true,
+                  greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
+                  linearLabel: "Updated",
+                  maxWaitingPullRequests: defaultMaxWaitingPullRequests,
+                  repo: "owner/updated",
+                  setup: ["bun install"],
+                  stallTimeoutMinutes: 10,
+                  verify: [],
+                }))),
+              ),
+            ], { concurrency: "unbounded" })
+
+            const workflow = yield* repoConfig.document
+            const config = yield* repoConfig.read
+
+            expect(workflow.path).toBe(realpathSync(secondPath))
+            expect(workflow.promptTemplate).toBe("Second prompt")
+            expect(config.linearLabel).toBe("Updated")
+            expect(config.repo).toBe("owner/updated")
+            expect(readFileSync(firstPath, "utf8")).toContain("linear-label: First")
+            expect(readFileSync(secondPath, "utf8")).toContain("linear-label: Updated")
+            expect(readFileSync(secondPath, "utf8")).toContain("Second prompt")
+          }).pipe(Effect.provide(makeRepoConfigLayer(instrumentedFileSystem)))
+        })(),
+      ),
+    ))
+
   it.effect("preserves the existing prompt template when writing with a cold cache", () =>
     withTempCwd((tempDirectory) =>
       Effect.gen(function* () {
@@ -453,6 +530,26 @@ describe("RepoConfig", () => {
 
         expect(workflow.config.raw["future-setting"]).toBe("hello\nworld")
         expect(workflow.config.raw["future-list"]).toEqual(["bun run check\n bun run test"])
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
+
+  it.effect("parses quoted yaml keys containing colons in unknown workflow fields", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: [
+            '"https://example.com/workflow": true',
+            "'scope:setting': value",
+            "repo: owner/name",
+          ].join("\n"),
+          prompt: "Quoted keys should parse",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const workflow = yield* repoConfig.document
+
+        expect(workflow.config.raw["https://example.com/workflow"]).toBe(true)
+        expect(workflow.config.raw["scope:setting"]).toBe("value")
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
