@@ -217,6 +217,42 @@ describe("RepoConfig", () => {
       }).pipe(Effect.provide(repoConfigLayer)),
     ))
 
+  it.effect("preserves the existing prompt template when writing with a cold cache", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: "linear-label: Orca\nrepo: owner/name",
+          prompt: "Keep this repo-owned prompt",
+        })
+
+        const repoConfig = yield* RepoConfig
+        yield* repoConfig.write(new RepoConfigData({
+          agent: "opencode",
+          agentArgs: [],
+          agentTimeoutMinutes: 45,
+          baseBranch: "main",
+          branchPrefix: "orca",
+          cleanupWorktreeOnSuccess: true,
+          draftPr: true,
+          greptilePollIntervalSeconds: defaultGreptilePollIntervalSeconds,
+          linearLabel: "Autowrite",
+          maxWaitingPullRequests: defaultMaxWaitingPullRequests,
+          repo: "owner/name",
+          setup: ["bun install"],
+          stallTimeoutMinutes: 10,
+          verify: ["bun run check"],
+        }))
+
+        const workflow = yield* repoConfig.document
+        const workflowContent = readFileSync(join(tempDirectory, defaultWorkflowFileName), "utf8")
+
+        expect(workflow.promptTemplate).toBe("Keep this repo-owned prompt")
+        expect(workflow.prompt).toBe("Keep this repo-owned prompt")
+        expect(workflowContent).toContain("Keep this repo-owned prompt")
+        expect(workflowContent).toContain("linear-label: Autowrite")
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
+
   it.effect("serializes concurrent refreshes across document and read", () =>
     withTempCwd((tempDirectory) => {
       let activeReads = 0
@@ -303,10 +339,30 @@ describe("RepoConfig", () => {
           Effect.promise(() => writeStarted.promise).pipe(Effect.flatMap(() => repoConfig.read)),
         ], { concurrency: "unbounded" })
 
+        const workflow = yield* repoConfig.document
+
         expect(concurrentRead.linearLabel).toBe("Autowrite")
+        expect(workflow.promptTemplate).toBe("Concurrent workflow")
         expect(maxActiveOperations).toBe(1)
       }).pipe(Effect.provide(makeRepoConfigLayer(instrumentedFileSystem)))
     }))
+
+  it.effect("rejects blank agent args entries during workflow validation", () =>
+    withTempCwd((tempDirectory) =>
+      Effect.gen(function* () {
+        writeWorkflowFile(join(tempDirectory, defaultWorkflowFileName), {
+          frontMatter: 'agent-args: ["--model", ""]\nrepo: owner/name',
+          prompt: "Blank agent args should fail validation",
+        })
+
+        const repoConfig = yield* RepoConfig
+        const error = yield* repoConfig.read.pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(RepoConfigError)
+        expect(error.code).toBe("workflow-config-validation-failed")
+        expect(error.message).toContain('"agentArgs" entries must not be blank.')
+      }).pipe(Effect.provide(repoConfigLayer)),
+    ))
 
   it.effect("workflow front matter getters resolve defaults, env indirection, and home-relative paths", () =>
     withEnv(

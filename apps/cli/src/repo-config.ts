@@ -266,13 +266,11 @@ export const RepoConfigLive = Effect.gen(function* () {
   const write = (config: RepoConfigData) =>
     Effect.gen(function* () {
       const path = yield* resolveWorkflowPath()
-      const promptTemplate = yield* document.pipe(
-        Effect.map((loadedWorkflow) => loadedWorkflow.promptTemplate),
-        Effect.orElseSucceed(() => defaultWorkflowPromptTemplate),
-      )
-      const payload = renderWorkflowDocument(config, promptTemplate)
 
       yield* refreshSemaphore.withPermit(Effect.gen(function* () {
+        const promptTemplate = yield* resolvePromptTemplateForWrite(fs, cache, path)
+        const payload = renderWorkflowDocument(config, promptTemplate)
+
         yield* fs.makeDirectory(dirname(path), { recursive: true }).pipe(
           Effect.mapError((cause) => new RepoConfigError({
             code: "workflow-write-failed",
@@ -363,6 +361,30 @@ const loadWorkflowState = (path: string, source: { readonly raw: string; readonl
       path,
       stamp: source.stamp,
     } satisfies LoadedWorkflowState
+  })
+
+const resolvePromptTemplateForWrite = (
+  fs: FileSystem.FileSystem,
+  cache: Ref.Ref<LoadedWorkflowState | null>,
+  path: string,
+) =>
+  Effect.gen(function* () {
+    const cached = yield* Ref.get(cache)
+    const sourceResult = yield* Effect.result(readWorkflowSource(fs, path))
+
+    if (Result.isFailure(sourceResult)) {
+      return defaultWorkflowPromptTemplate
+    }
+
+    const source = sourceResult.success
+    if (cached !== null && cached.path === path && workflowStampEquals(cached.stamp, source.stamp)) {
+      return cached.document.promptTemplate
+    }
+
+    const loadedResult = yield* Effect.result(loadWorkflowState(path, source))
+    return Result.isSuccess(loadedResult)
+      ? loadedResult.success.document.promptTemplate
+      : defaultWorkflowPromptTemplate
   })
 
 const readWorkflowSource = (fs: FileSystem.FileSystem, path: string) =>
@@ -496,6 +518,9 @@ const validateDispatchCriticalConfig = (config: RepoConfigData) => {
   }
   if (config.stallTimeoutMinutes <= 0) {
     problems.push('"stallTimeoutMinutes" must be greater than 0.')
+  }
+  if (config.agentArgs.some((argument) => argument.trim().length === 0)) {
+    problems.push('"agentArgs" entries must not be blank.')
   }
   if (config.setup.some((command) => command.trim().length === 0)) {
     problems.push('"setup" entries must not be blank.')
